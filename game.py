@@ -13,7 +13,7 @@ from collections import defaultdict
 from PIL import Image, ImageDraw, ImageFont
 from pyrogram import Client, filters
 from pyrogram.enums import ChatType, ChatMemberStatus, ParseMode
-from pyrogram.errors import MessageNotModified, RPCError
+from pyrogram.errors import MessageNotModified
 from pyrogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
@@ -31,7 +31,7 @@ except ImportError:
 API_ID = 35218869
 API_HASH = "80baadcfd00a39a0ff1f5f529d23156f"
 OWNER_ID = 8564072723
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN")
 
 START_IMG = "https://graph.org/file/7c0c03d68308f0c5dad42-ddb933df03f0ff0632.jpg"
 SUPPORT_GC = "https://t.me/Roohi_Soul_Gc"
@@ -213,14 +213,15 @@ for row in custom_rows:
         WORDS[diff].append(w)
 
 # ============================================================
-# GRAPHICS & CARD GENERATORS (PILLOW)
+# GRAPHICS ENGINE (PIL / STATS / PUZZLE)
 # ============================================================
 
 def get_font(size):
     paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
     ]
     for path in paths:
         if os.path.exists(path):
@@ -230,90 +231,77 @@ def get_font(size):
                 pass
     return ImageFont.load_default()
 
-def draw_rounded_rect(draw, coords, radius, fill):
+def draw_pill(draw, coords, radius, fill):
     x1, y1, x2, y2 = coords
     draw.rounded_rectangle([x1, y1, x2, y2], radius=radius, fill=fill)
 
 def generate_stats_card(user_data, rank_str="Unranked"):
-    img = Image.new("RGB", (900, 500), "#0d1117")
+    img = Image.new("RGB", (900, 520), "#0b0f19")
     draw = ImageDraw.Draw(img)
 
-    f_title = get_font(38)
-    f_sub = get_font(24)
-    f_val = get_font(28)
+    f_title = get_font(36)
+    f_sub = get_font(22)
+    f_val = get_font(30)
     f_lbl = get_font(18)
 
-    draw_rounded_rect(draw, (20, 20, 880, 480), 20, "#161b22")
-    draw.text((50, 40), f"PLAYER DOSSIER: {user_data['name'].upper()}", font=f_title, fill="#58a6ff")
-    draw.text((50, 85), f"ID: {user_data['user_id']} | Rank Tier: {rank_str}", font=f_sub, fill="#8b949e")
+    draw_pill(draw, (20, 20, 880, 500), 24, "#131b2e")
 
-    cards = [
-        ("⭐ TOTAL POINTS", f"{user_data['points']:,}", "#f1e05a", (50, 140, 420, 240)),
-        ("🧩 WORDS SOLVED", f"{user_data['solved']:,}", "#2ea043", (460, 140, 830, 240)),
-        ("🔥 CURRENT STREAK", f"{user_data['streak']} (Best: {user_data['best_streak']})", "#ff7b72", (50, 260, 420, 360)),
-        ("⚔️ FIGHT STATS", f"{user_data['fight_wins']}W / {user_data['fight_losses']}L", "#a371f7", (460, 260, 830, 360))
+    # Header
+    name_clean = user_data['name'][:22].upper()
+    draw.text((50, 45), f"PILOT: {name_clean}", font=f_title, fill="#38bdf8")
+    draw.text((50, 95), f"ID: {user_data['user_id']}  •  GLOBAL TIER: {rank_str}", font=f_sub, fill="#94a3b8")
+
+    boxes = [
+        ("⭐ TOTAL POINTS", f"{user_data['points']:,}", "#fbbf24", (50, 150, 420, 255)),
+        ("🧩 WORDS SOLVED", f"{user_data['solved']:,}", "#34d399", (460, 150, 830, 255)),
+        ("🔥 CURRENT STREAK", f"{user_data['streak']} (Best: {user_data['best_streak']})", "#f87171", (50, 280, 420, 385)),
+        ("⚔️ PVP RECORD", f"{user_data['fight_wins']}W / {user_data['fight_losses']}L", "#c084fc", (460, 280, 830, 385))
     ]
 
-    for title, val, color, box in cards:
-        draw_rounded_rect(draw, box, 12, "#21262d")
-        draw.text((box[0] + 20, box[1] + 15), title, font=f_lbl, fill=color)
-        draw.text((box[0] + 20, box[1] + 45), val, font=f_val, fill="#ffffff")
+    for title, val, color, box in boxes:
+        draw_pill(draw, box, 16, "#1e293b")
+        draw.text((box[0] + 20, box[1] + 20), title, font=f_lbl, fill=color)
+        draw.text((box[0] + 20, box[1] + 55), val, font=f_val, fill="#ffffff")
 
-    total_f = user_data['fight_wins'] + user_data['fight_losses']
-    ratio = (user_data['fight_wins'] / total_f) if total_f > 0 else 0
-    draw.text((50, 390), f"BATTLE WINRATE: {ratio * 100:.1f}%", font=f_lbl, fill="#8b949e")
-    
-    draw_rounded_rect(draw, (50, 420, 830, 440), 8, "#30363d")
-    fill_w = 50 + int(780 * ratio)
-    if fill_w > 50:
-        draw_rounded_rect(draw, (50, 420, fill_w, 440), 8, "#2ea043")
+    # Win-rate meter
+    total_fights = user_data['fight_wins'] + user_data['fight_losses']
+    rate = (user_data['fight_wins'] / total_fights) if total_fights > 0 else 0.0
+    draw.text((50, 410), f"WIN PROBABILITY: {rate*100:.1f}%", font=f_lbl, fill="#94a3b8")
 
-    bio = io.BytesIO()
-    bio.name = "stats.png"
-    img.save(bio, "PNG")
-    bio.seek(0)
-    return bio
-
-def generate_leaderboard_banner(scope_title):
-    img = Image.new("RGB", (1000, 260), "#090d16")
-    draw = ImageDraw.Draw(img)
-    f_title = get_font(42)
-    f_desc = get_font(24)
-
-    draw_rounded_rect(draw, (15, 15, 985, 245), 18, "#111827")
-    draw.text((50, 50), "🏆 LEADERBOARD HALL OF FAME", font=f_title, fill="#f59e0b")
-    draw.text((50, 110), scope_title.upper(), font=f_desc, fill="#60a5fa")
-    draw.text((50, 160), "Real-time sync | Highest scoring champions", font=get_font(20), fill="#9ca3af")
+    draw_pill(draw, (50, 440, 830, 465), 12, "#334155")
+    fill_end = 50 + int(780 * rate)
+    if fill_end > 60:
+        draw_pill(draw, (50, 440, fill_end, 465), 12, "#38bdf8")
 
     bio = io.BytesIO()
-    bio.name = "lb_banner.png"
+    bio.name = "dossier.png"
     img.save(bio, "PNG")
     bio.seek(0)
     return bio
 
 def make_puzzle_image(jumbled, mode_tag, puzzle_id):
-    img = Image.new("RGB", (1200, 650), "#0f172a")
+    img = Image.new("RGB", (1200, 650), "#0a0e17")
     draw = ImageDraw.Draw(img)
 
-    title_font = get_font(52)
-    small_font = get_font(34)
+    f_title = get_font(48)
+    f_sub = get_font(32)
 
-    text_len = len(jumbled)
-    if text_len <= 7:
-        display_text = "   ".join(jumbled)
-        word_font = get_font(85)
-    elif text_len <= 11:
-        display_text = "  ".join(jumbled)
-        word_font = get_font(65)
+    length = len(jumbled)
+    if length <= 7:
+        text_spaced = "   ".join(jumbled)
+        f_word = get_font(85)
+    elif length <= 11:
+        text_spaced = "  ".join(jumbled)
+        f_word = get_font(65)
     else:
-        display_text = " ".join(jumbled)
-        word_font = get_font(48)
+        text_spaced = " ".join(jumbled)
+        f_word = get_font(48)
 
-    draw_rounded_rect(draw, (40, 40, 1160, 610), 24, "#1e293b")
-    draw.text((600, 100), "🧩 UNSCRAMBLE THE WORD", anchor="mm", font=title_font, fill="#38bdf8")
-    draw.text((600, 310), display_text, anchor="mm", font=word_font, fill="#f8fafc")
-    draw.text((600, 480), f"{mode_tag.upper()} • PUZZLE #{puzzle_id}", anchor="mm", font=small_font, fill="#94a3b8")
-    draw.text((600, 540), "Type your answer directly in group chat!", anchor="mm", font=small_font, fill="#38bdf8")
+    draw_pill(draw, (40, 40, 1160, 610), 30, "#151e32")
+    draw.text((600, 100), "🧩 UNSCRAMBLE CIPHER", anchor="mm", font=f_title, fill="#38bdf8")
+    draw.text((600, 310), text_spaced, anchor="mm", font=f_word, fill="#f8fafc")
+    draw.text((600, 480), f"TIER: {mode_tag.upper()}  •  PUZZLE #{puzzle_id}", anchor="mm", font=f_sub, fill="#94a3b8")
+    draw.text((600, 540), "Type solution directly into chat", anchor="mm", font=f_sub, fill="#38bdf8")
 
     bio = io.BytesIO()
     bio.name = f"puzzle_{puzzle_id}.png"
@@ -322,7 +310,7 @@ def make_puzzle_image(jumbled, mode_tag, puzzle_id):
     return bio
 
 # ============================================================
-# HELPERS & DB UTILS
+# HELPERS & DB WRAPPERS
 # ============================================================
 
 def ensure_user(user):
@@ -446,7 +434,7 @@ async def delete_after(msg: Message, delay: int = 5):
         pass
 
 # ============================================================
-# KEYBOARDS WITH COLORFUL ACCENTS
+# UI BUTTONS & CONTROLS
 # ============================================================
 
 def normal_keyboard():
@@ -456,24 +444,24 @@ def normal_keyboard():
             InlineKeyboardButton("⏭️ Skip Turn", callback_data="skip")
         ],
         [
-            InlineKeyboardButton("🔀 Next Puzzle", callback_data="newword")
+            InlineKeyboardButton("🔀 Next Puzzle", callback_data="newword"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="open_settings")
         ]
     ])
 
 def fight_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("💡 Get Letter Hint", callback_data="fight_hint")
+            InlineKeyboardButton("💡 Reveal Duel Hint", callback_data="fight_hint")
         ]
     ])
 
 # ============================================================
-# CORE GAME ENGINE
+# GAME CYCLER
 # ============================================================
 
 JUMBLE_FIGHT = {}
 FIGHT_LOBBY = {}
-REBET_LOBBY = {}
 
 async def start_game(chat_id, difficulty, message_or_chat):
     if chat_id in JUMBLE_FIGHT:
@@ -483,9 +471,9 @@ async def start_game(chat_id, difficulty, message_or_chat):
     if not settings["is_active"]:
         return
 
-    old_game = DB.execute("SELECT message_id FROM games WHERE chat_id=?", (chat_id,)).fetchone()
-    if old_game and settings["auto_delete"] and old_game["message_id"]:
-        await safe_delete_and_unpin(chat_id, old_game["message_id"])
+    old = DB.execute("SELECT message_id FROM games WHERE chat_id=?", (chat_id,)).fetchone()
+    if old and settings["auto_delete"] and old["message_id"]:
+        await safe_delete_and_unpin(chat_id, old["message_id"])
 
     DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
 
@@ -506,12 +494,15 @@ async def start_game(chat_id, difficulty, message_or_chat):
 
     image = make_puzzle_image(jumbled, difficulty, puzzle_id)
     caption = (
-        f"<blockquote>🧩 <b>PUZZLE #{puzzle_id} ACTIVE</b>\n\n"
-        f"🎯 <b>Tier:</b> <code>{difficulty.upper()}</code>\n"
-        f"⏱️ <b>Time Limit:</b> <code>{timer_val // 60}m {timer_val % 60}s</code>\n"
-        f"⭐ <b>Bounty:</b> <code>+{reward_pts} Points</code>\n"
-        f"💡 <b>Hints Allowed:</b> <code>{hint_limit} per player</code></blockquote>\n\n"
-        f"<blockquote expandable>🔤 <i>Unscramble letters and send text directly in group chat!</i></blockquote>"
+        f"<b>┌── 🧩 JUMBLE #{puzzle_id} ──┐</b>\n"
+        f"│ 🎯 <b>Tier:</b> <code>{difficulty.upper()}</code>\n"
+        f"│ ⏱️ <b>Timer:</b> <code>{timer_val // 60}m {timer_val % 60}s</code>\n"
+        f"│ ⭐ <b>Bounty:</b> <code>+{reward_pts} pts</code>\n"
+        f"│ 💡 <b>Hints Limit:</b> <code>{hint_limit}/user</code>\n"
+        f"<b>└──────────────────┘</b>\n\n"
+        f"<blockquote expandable>"
+        f"🔤 <i>Type the unscrambled word directly into the chat to claim points.</i>"
+        f"</blockquote>"
     )
 
     try:
@@ -527,7 +518,7 @@ async def start_game(chat_id, difficulty, message_or_chat):
         except Exception:
             pass
     except Exception as e:
-        print(f"Game start render failed: {e}")
+        print(f"Error initiating puzzle: {e}")
 
     asyncio.create_task(expire_game(chat_id, puzzle_id, expires))
 
@@ -550,10 +541,11 @@ async def expire_game(chat_id, puzzle_id, expires):
     try:
         exp_msg = await app.send_message(
             chat_id,
-            f"<blockquote>⌛ <b>ROUND EXPIRED!</b>\n\n"
-            f"❌ Puzzle left uncracked.\n"
-            f"✅ <b>Word Was:</b> <code>{row['word'].upper()}</code>\n\n"
-            f"🔄 <i>Spinning up next puzzle in 3s...</i></blockquote>",
+            f"<b>┌── ⌛ TIME RUN OUT ──┐</b>\n"
+            f"│ ❌ Puzzle left unresolved.\n"
+            f"│ ✅ <b>Word was:</b> <code>{row['word'].upper()}</code>\n"
+            f"<b>└───────────────────┘</b>\n\n"
+            f"<i>Next puzzle spinning up in 3s...</i>",
             parse_mode=ParseMode.HTML
         )
         if s["auto_delete"]:
@@ -567,158 +559,7 @@ async def expire_game(chat_id, puzzle_id, expires):
         asyncio.create_task(start_game(chat_id, s["default_diff"], chat_id))
 
 # ============================================================
-# USER STATS INSPECTION
-# ============================================================
-
-async def resolve_target_user(message: Message):
-    if message.reply_to_message and message.reply_to_message.from_user:
-        return message.reply_to_message.from_user
-
-    args = message.command[1:] if len(message.command) > 1 else []
-    if args:
-        arg = args[0]
-        try:
-            return await app.get_users(int(arg) if arg.isdigit() else arg)
-        except Exception:
-            pass
-
-    if message.entities:
-        for ent in message.entities:
-            if ent.type.name == "TEXT_MENTION" and ent.user:
-                return ent.user
-
-    return message.from_user
-
-@app.on_message(filters.command(["stats", "stat", "mystats", "score", "profile"]))
-async def user_stats_cmd(_, message: Message):
-    target = await resolve_target_user(message)
-    if not target:
-        return await message.reply_text("❌ User could not be found.")
-
-    ensure_user(target)
-    u = get_user(target.id)
-
-    rank_row = DB.execute("""
-        SELECT COUNT(*) + 1 AS rank FROM users WHERE points > ?
-    """, (u["points"],)).fetchone()
-    rank_str = f"#{rank_row['rank']}" if rank_row else "Unranked"
-
-    img_card = generate_stats_card(u, rank_str)
-
-    priv_tag = "🔒 Encrypted" if u["is_private"] else "🌐 Public"
-    caption = (
-        f"<blockquote>👤 <b>DOSSIER: {get_mention(target)}</b> [<code>{target.id}</code>]\n\n"
-        f"🏆 <b>Global Stand:</b> <code>{rank_str}</code>\n"
-        f"⭐ <b>Score:</b> <code>{u['points']:,} pts</code>\n"
-        f"🧩 <b>Solved:</b> <code>{u['solved']:,}</code>\n"
-        f"🔥 <b>Streak:</b> <code>{u['streak']}</code> (Peak: <code>{u['best_streak']}</code>)\n"
-        f"🛡️ <b>Profile Mode:</b> <code>{priv_tag}</code></blockquote>\n\n"
-        f"<blockquote expandable>⚔️ <b>PvP Record:</b> <code>{u['fight_wins']}W - {u['fight_losses']}L</code>\n"
-        f"💰 <b>High Stakes:</b> <code>{u['bet_wins']}W - {u['bet_losses']}L</code></blockquote>"
-    )
-
-    await message.reply_photo(photo=img_card, caption=caption, parse_mode=ParseMode.HTML)
-
-# ============================================================
-# VISUAL LEADERBOARD
-# ============================================================
-
-def fetch_leaderboard_data(scope_type, chat_id):
-    now = time.time()
-    if scope_type == "daily":
-        since = now - 86400
-        title = "📅 DAILY SPRINT (GROUP 24H)"
-        rows = DB.execute("""
-            SELECT h.user_id, u.name, u.username, u.is_private, SUM(h.points) as total_pts
-            FROM score_history h
-            LEFT JOIN users u ON h.user_id = u.user_id
-            WHERE h.chat_id = ? AND h.timestamp >= ?
-            GROUP BY h.user_id
-            HAVING total_pts > 0
-            ORDER BY total_pts DESC
-            LIMIT 10
-        """, (chat_id, since)).fetchall()
-    elif scope_type == "weekly":
-        since = now - (86400 * 7)
-        title = "🗓️ WEEKLY ARENA (GROUP 7D)"
-        rows = DB.execute("""
-            SELECT h.user_id, u.name, u.username, u.is_private, SUM(h.points) as total_pts
-            FROM score_history h
-            LEFT JOIN users u ON h.user_id = u.user_id
-            WHERE h.chat_id = ? AND h.timestamp >= ?
-            GROUP BY h.user_id
-            HAVING total_pts > 0
-            ORDER BY total_pts DESC
-            LIMIT 10
-        """, (chat_id, since)).fetchall()
-    elif scope_type == "monthly":
-        since = now - (86400 * 30)
-        title = "📆 MONTHLY CONQUEST (GLOBAL 30D)"
-        rows = DB.execute("""
-            SELECT h.user_id, u.name, u.username, u.is_private, SUM(h.points) as total_pts
-            FROM score_history h
-            LEFT JOIN users u ON h.user_id = u.user_id
-            WHERE h.timestamp >= ?
-            GROUP BY h.user_id
-            HAVING total_pts > 0
-            ORDER BY total_pts DESC
-            LIMIT 10
-        """, (since,)).fetchall()
-    else:
-        title = "🌍 GLOBAL SUPREMACY (ALL-TIME)"
-        rows = DB.execute("""
-            SELECT user_id, name, username, is_private, points as total_pts
-            FROM users
-            WHERE points > 0
-            ORDER BY points DESC
-            LIMIT 10
-        """).fetchall()
-
-    return title, rows
-
-def build_leaderboard_markup(scope_type, chat_id):
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(f"{'🔵 ' if scope_type=='daily' else '⚪ '}Daily", callback_data=f"lb_daily_{chat_id}"),
-            InlineKeyboardButton(f"{'🔵 ' if scope_type=='weekly' else '⚪ '}Weekly", callback_data=f"lb_weekly_{chat_id}")
-        ],
-        [
-            InlineKeyboardButton(f"{'🟣 ' if scope_type=='monthly' else '⚪ '}Monthly", callback_data=f"lb_monthly_{chat_id}"),
-            InlineKeyboardButton(f"{'🟡 ' if scope_type=='global' else '⚪ '}Global", callback_data=f"lb_global_{chat_id}")
-        ],
-        [InlineKeyboardButton("🗑️ Close Dashboard", callback_data="close_panel")]
-    ])
-
-@app.on_message(filters.command(["leaderboard", "top", "rank", "lb"]))
-async def leaderboard_cmd(_, message: Message):
-    chat_id = message.chat.id
-    scope = "daily" if is_group(message) else "global"
-    title, rows = fetch_leaderboard_data(scope, chat_id)
-    banner = generate_leaderboard_banner(title)
-
-    text = f"<blockquote>🏆 <b>{title}</b>\n\n"
-    if not rows:
-        text += "<i>No records logged yet. Begin solving words to claim #1!</i>"
-    else:
-        medals = ["🥇", "🥈", "🥉"]
-        for i, u in enumerate(rows, 1):
-            badge = medals[i - 1] if i <= 3 else f"<code>{i:02d}.</code>"
-            user_name = html.escape(str(u["name"] or "Player"))
-            if u["is_private"]:
-                entry = f"<b>{user_name}</b>"
-            elif u["username"]:
-                entry = f"<a href='https://t.me/{u['username']}'>{user_name}</a>"
-            else:
-                entry = f"<a href='tg://openmessage?user_id={u['user_id']}'>{user_name}</a>"
-
-            text += f"{badge} {entry} — <code>{u['total_pts']:,} pts</code>\n"
-    text += "</blockquote>"
-
-    kb = build_leaderboard_markup(scope, chat_id)
-    await message.reply_photo(photo=banner, caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
-
-# ============================================================
-# PVP FIGHT ENGINE
+# PVP COMBAT ENGINE
 # ============================================================
 
 async def fight_next(chat_id):
@@ -750,18 +591,22 @@ async def fight_next(chat_id):
     game["hints_left"] = {p: per_round_hints for p in game["players"]}
     game["round_revealed"] = {p: [] for p in game["players"]}
 
-    fight_tag = "BET FIGHT" if game.get("is_bet") else "DUEL"
+    fight_tag = "BET MATCH" if game.get("is_bet") else "DUEL"
     image = make_puzzle_image(jumbled, f"{fight_tag} {diff.upper()}", game["round"])
 
     p1, p2 = game["players"]
-    extra_stake = f"\n💵 <b>Pot:</b> <code>{game.get('bet_amount') * 2} pts</code>" if game.get("is_bet") else ""
+    extra_pot = f"\n│ 💰 <b>Total Pot:</b> <code>{game.get('bet_amount') * 2} pts</code>" if game.get("is_bet") else ""
 
     caption = (
-        f"<blockquote>⚔️ <b>{fight_tag} — ROUND {game['round']}/10</b>\n\n"
-        f"🎯 <b>Tier:</b> <code>{diff.upper()}</code> | ⏱️ <b>Clock:</b> <code>{game['timer']}s</code>{extra_stake}\n"
-        f"💡 <b>Hints:</b> <code>{per_round_hints}/round each</code>\n"
-        f"👥 <b>Combatants:</b> {game['mentions'][p1]} ⚔️ {game['mentions'][p2]}</blockquote>\n\n"
-        f"<blockquote expandable>⚡ <i>Type unscrambled word directly in chat to win round!</i></blockquote>"
+        f"<b>┌── ⚔️ {fight_tag}: ROUND {game['round']}/10 ──┐</b>\n"
+        f"│ 🎯 <b>Tier:</b> <code>{diff.upper()}</code>\n"
+        f"│ ⏱️ <b>Clock:</b> <code>{game['timer']}s</code>{extra_pot}\n"
+        f"│ 💡 <b>Round Hints:</b> <code>{per_round_hints} each</code>\n"
+        f"│ 👥 <b>Rivals:</b> {game['mentions'][p1]} ⚔️ {game['mentions'][p2]}\n"
+        f"<b>└──────────────────────────────┘</b>\n\n"
+        f"<blockquote expandable>"
+        f"⚡ <i>Type solution in chat to score first and conquer the round!</i>"
+        f"</blockquote>"
     )
 
     try:
@@ -772,13 +617,13 @@ async def fight_next(chat_id):
         except Exception:
             pass
     except Exception as e:
-        print(f"Fight round error: {e}")
+        print(f"Fight dispatch error: {e}")
 
     game["task"] = asyncio.create_task(fight_timeout_task(chat_id, game["round"], game["timer"]))
 
 async def fight_timeout_task(chat_id, round_num, timer_duration):
     await asyncio.sleep(timer_duration)
-    should_advance = False
+    advance = False
     async with LOCK:
         game = JUMBLE_FIGHT.get(chat_id)
         if game and game["round"] == round_num:
@@ -790,18 +635,19 @@ async def fight_timeout_task(chat_id, round_num, timer_duration):
             try:
                 t_msg = await app.send_message(
                     chat_id,
-                    f"<blockquote>⌛ <b>ROUND {round_num} EXPIRED!</b>\n"
-                    f"No one hit the word.\n"
-                    f"✅ <b>Target Word:</b> <code>{w.upper()}</code></blockquote>",
+                    f"<b>┌── ⌛ ROUND {round_num} OVER ──┐</b>\n"
+                    f"│ ❌ No solver hit the target.\n"
+                    f"│ ✅ <b>Word was:</b> <code>{w.upper()}</code>\n"
+                    f"<b>└────────────────────────┘</b>",
                     parse_mode=ParseMode.HTML
                 )
                 if s["auto_delete"]:
                     asyncio.create_task(delete_after(t_msg, 4))
             except Exception:
                 pass
-            should_advance = True
+            advance = True
 
-    if should_advance:
+    if advance:
         await asyncio.sleep(2)
         asyncio.create_task(fight_next(chat_id))
 
@@ -827,12 +673,17 @@ async def finish_fight(chat_id):
             DB.execute("UPDATE users SET fight_losses=fight_losses+1 WHERE user_id=?", (loser,))
             DB.commit()
             res = (
-                f"<blockquote>🏆 <b>DUEL COMPLETE!</b>\n\n"
-                f"🥇 <b>Victor:</b> {game['mentions'][winner]} (<code>{game['scores'][winner]} pts</code>)\n"
-                f"🥈 <b>Runner-up:</b> {game['mentions'][loser]} (<code>{game['scores'][loser]} pts</code>)</blockquote>"
+                f"<b>┌── 🏆 DUEL CONCLUDED ──┐</b>\n"
+                f"│ 🥇 <b>Champion:</b> {game['mentions'][winner]} (<code>{game['scores'][winner]} pts</code>)\n"
+                f"│ 🥈 <b>Contender:</b> {game['mentions'][loser]} (<code>{game['scores'][loser]} pts</code>)\n"
+                f"<b>└──────────────────────┘</b>"
             )
         else:
-            res = f"<blockquote>🤝 <b>DUEL TIED!</b>\nScore locked at <code>{s1} - {s2}</code>.</blockquote>"
+            res = (
+                f"<b>┌── 🤝 DUEL TIED ──┐</b>\n"
+                f"│ Score leveled at <code>{s1} - {s2}</code>.\n"
+                f"<b>└─────────────────┘</b>"
+            )
     else:
         amt = game["bet_amount"]
         if winner:
@@ -847,15 +698,16 @@ async def finish_fight(chat_id):
             DB.commit()
 
             res = (
-                f"<blockquote>💰 <b>HIGH-STAKES POT SETTLED!</b>\n\n"
-                f"🥇 <b>Victor:</b> {game['mentions'][winner]} (+{win_cut:,} pts)\n"
-                f"🛡️ <b>Cashback Protected:</b> {game['mentions'][loser]} (+{lose_cashback:,} pts)</blockquote>"
+                f"<b>┌── 💰 HIGH STAKES SETTLED ──┐</b>\n"
+                f"│ 🥇 <b>Victor:</b> {game['mentions'][winner]} (<code>+{win_cut:,} pts</code>)\n"
+                f"│ 🛡️ <b>Cashback:</b> {game['mentions'][loser]} (<code>+{lose_cashback:,} pts</code>)\n"
+                f"<b>└───────────────────────────┘</b>"
             )
         else:
             DB.execute("UPDATE users SET points=points+? WHERE user_id=?", (amt, p1))
             DB.execute("UPDATE users SET points=points+? WHERE user_id=?", (amt, p2))
             DB.commit()
-            res = f"<blockquote>🤝 <b>STAKES REFUNDED!</b> Both combatants recouped {amt:,} pts.</blockquote>"
+            res = f"<b>┌── 🤝 STAKES RESTORED ──┐</b>\n│ Tied battle: <code>{amt:,} pts</code> refunded."
 
     await app.send_message(chat_id, res, parse_mode=ParseMode.HTML)
     await asyncio.sleep(3)
@@ -865,145 +717,178 @@ async def finish_fight(chat_id):
         asyncio.create_task(start_game(chat_id, s["default_diff"], chat_id))
 
 # ============================================================
-# INCOMING MESSAGE / ANSWER HANDLER
+# COMMAND & EVENT HANDLERS
 # ============================================================
 
-ALL_BOT_COMMANDS = {
-    "start", "help", "jumble", "jumblefight", "fight", "rapido", "jumblebetfight", "betfight",
-    "settings", "setting", "setpoints", "sethint", "setdaily", "setbonus", "daily", "bonus",
-    "private", "public", "addword", "addwords", "delword", "delallword", "delallwords",
-    "clearword", "clearwords", "word", "words", "auth", "unauth", "authlist", "update", "gitpull",
-    "stats", "stat", "mystats", "score", "profile", "leaderboard", "top", "rank", "lb",
-    "backup", "dbbackup", "getdb", "addstar", "addpoints", "deductstar", "deductpoints", "removestar"
-}
+async def resolve_target_user(message: Message):
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return message.reply_to_message.from_user
 
-@app.on_message(filters.text & filters.group)
-async def group_answer_handler(_, message: Message):
-    if not message.from_user or not message.text:
-        return
+    args = message.command[1:] if len(message.command) > 1 else []
+    if args:
+        arg = args[0]
+        try:
+            return await app.get_users(int(arg) if arg.isdigit() else arg)
+        except Exception:
+            pass
 
-    txt = message.text.strip()
-    if txt.startswith(("/", "!", ".")):
-        cmd_candidate = txt[1:].split()[0].split("@")[0].lower()
-        if cmd_candidate in ALL_BOT_COMMANDS:
-            return
+    if message.entities:
+        for ent in message.entities:
+            if ent.type.name == "TEXT_MENTION" and ent.user:
+                return ent.user
 
+    return message.from_user
+
+@app.on_message(filters.command(["stats", "stat", "score", "profile"]))
+async def user_stats_cmd(_, message: Message):
+    target = await resolve_target_user(message)
+    if not target:
+        return await message.reply_text("❌ User could not be identified.")
+
+    ensure_user(target)
+    u = get_user(target.id)
+
+    rank_row = DB.execute("SELECT COUNT(*) + 1 AS rank FROM users WHERE points > ?", (u["points"],)).fetchone()
+    rank_str = f"#{rank_row['rank']}" if rank_row else "Unranked"
+
+    img_card = generate_stats_card(u, rank_str)
+
+    # Rich Text Monospace Table
+    table_card = (
+        f"<blockquote>"
+        f"┌─ <b>TELEMETRY DOSSIER</b>\n"
+        f"│ 👤 <b>Agent:</b> {get_mention(target)}\n"
+        f"│ 🆔 <b>ID:</b> <code>{target.id}</code>\n"
+        f"│ 🏆 <b>Global Stand:</b> <code>{rank_str}</code>\n"
+        f"├───────────────────────────\n"
+        f"│ ⭐ <b>Score:</b>  <code>{u['points']:,} pts</code>\n"
+        f"│ 🧩 <b>Solved:</b> <code>{u['solved']:,} words</code>\n"
+        f"│ 🔥 <b>Streak:</b> <code>{u['streak']}</code> (Peak: <code>{u['best_streak']}</code>)\n"
+        f"│ ⚔️ <b>Duels:</b>  <code>{u['fight_wins']}W - {u['fight_losses']}L</code>\n"
+        f"│ 💰 <b>Stakes:</b> <code>{u['bet_wins']}W - {u['bet_losses']}L</code>\n"
+        f"└───────────────────────────</blockquote>"
+    )
+
+    await message.reply_photo(photo=img_card, caption=table_card, parse_mode=ParseMode.HTML)
+
+@app.on_message(filters.command(["leaderboard", "top", "rank", "lb"]))
+async def leaderboard_cmd(_, message: Message):
     chat_id = message.chat.id
-    user_id = message.from_user.id
-    cleaned = clean_answer(txt)
-    if not cleaned:
-        return
+    scope = "daily" if is_group(message) else "global"
+    text, kb = build_rich_leaderboard(scope, chat_id)
+    await message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
-    if chat_id in JUMBLE_FIGHT:
-        async with LOCK:
-            g = JUMBLE_FIGHT.get(chat_id)
-            if not g or user_id not in g["players"]:
-                return
+def build_rich_leaderboard(scope_type, chat_id):
+    now = time.time()
+    if scope_type == "daily":
+        since = now - 86400
+        title = "DAILY SPRINT (24H GC)"
+        rows = DB.execute("""
+            SELECT h.user_id, u.name, u.username, u.is_private, SUM(h.points) as total_pts
+            FROM score_history h
+            LEFT JOIN users u ON h.user_id = u.user_id
+            WHERE h.chat_id = ? AND h.timestamp >= ?
+            GROUP BY h.user_id
+            HAVING total_pts > 0
+            ORDER BY total_pts DESC
+            LIMIT 10
+        """, (chat_id, since)).fetchall()
+    elif scope_type == "weekly":
+        since = now - (86400 * 7)
+        title = "WEEKLY ARENA (7D GC)"
+        rows = DB.execute("""
+            SELECT h.user_id, u.name, u.username, u.is_private, SUM(h.points) as total_pts
+            FROM score_history h
+            LEFT JOIN users u ON h.user_id = u.user_id
+            WHERE h.chat_id = ? AND h.timestamp >= ?
+            GROUP BY h.user_id
+            HAVING total_pts > 0
+            ORDER BY total_pts DESC
+            LIMIT 10
+        """, (chat_id, since)).fetchall()
+    elif scope_type == "monthly":
+        since = now - (86400 * 30)
+        title = "MONTHLY GLOBAL (30D)"
+        rows = DB.execute("""
+            SELECT h.user_id, u.name, u.username, u.is_private, SUM(h.points) as total_pts
+            FROM score_history h
+            LEFT JOIN users u ON h.user_id = u.user_id
+            WHERE h.timestamp >= ?
+            GROUP BY h.user_id
+            HAVING total_pts > 0
+            ORDER BY total_pts DESC
+            LIMIT 10
+        """, (since,)).fetchall()
+    else:
+        title = "GLOBAL SUPREMACY"
+        rows = DB.execute("""
+            SELECT user_id, name, username, is_private, points as total_pts
+            FROM users
+            WHERE points > 0
+            ORDER BY points DESC
+            LIMIT 10
+        """).fetchall()
 
-            if time.time() <= g["expires"] and cleaned == clean_answer(g["word"]):
-                curr = asyncio.current_task()
-                if g.get("task") and g["task"] is not curr and not g["task"].done():
-                    try:
-                        g["task"].cancel()
-                    except Exception:
-                        pass
+    table_lines = [
+        f"<b>┌── 🏆 {title} ──┐</b>",
+        f"│ <code>{'RNK':<3} | {'OPERATIVE':<12} | {'PTS':>7}</code>",
+        "├───────────────────────────┤"
+    ]
 
-                g["scores"][user_id] += 1
-                s = get_settings(chat_id)
-                if s["auto_delete"] and g.get("msg_id"):
-                    await safe_delete_and_unpin(chat_id, g["msg_id"])
+    if not rows:
+        table_lines.append("│ <i>No activity recorded yet.</i>")
+    else:
+        for i, u in enumerate(rows, 1):
+            raw_name = (u["name"] or "Player")[:11]
+            u_clean = html.escape(raw_name)
+            pts_str = f"{u['total_pts']:,}"
+            table_lines.append(f"│ <code>{i:<3} | {u_clean:<12} | {pts_str:>7}</code>")
 
-                u_mention = get_mention(message.from_user)
-                r_msg = await message.reply_text(
-                    f"<blockquote>⚡ <b>ROUND WON BY {u_mention}!</b>\n"
-                    f"🎯 Score: <code>{g['scores'][user_id]}</code> pts</blockquote>",
-                    parse_mode=ParseMode.HTML
-                )
-                if s["auto_delete"]:
-                    asyncio.create_task(delete_after(r_msg, 4))
+    table_lines.append("<b>└───────────────────────────┘</b>")
+    formatted_card = "\n".join(table_lines)
 
-                await asyncio.sleep(2)
-                asyncio.create_task(fight_next(chat_id))
-                return
-        return
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"{'🟢 ' if scope_type=='daily' else ''}Daily", callback_data=f"lb_daily_{chat_id}"),
+            InlineKeyboardButton(f"{'🟡 ' if scope_type=='weekly' else ''}Weekly", callback_data=f"lb_weekly_{chat_id}")
+        ],
+        [
+            InlineKeyboardButton(f"{'🟣 ' if scope_type=='monthly' else ''}Monthly", callback_data=f"lb_monthly_{chat_id}"),
+            InlineKeyboardButton(f"{'🌐 ' if scope_type=='global' else ''}Global", callback_data=f"lb_global_{chat_id}")
+        ],
+        [InlineKeyboardButton("❌ Dismiss", callback_data="close_panel")]
+    ])
 
-    game = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
-    if not game or time.time() > game["expires"]:
-        return
-
-    if cleaned == clean_answer(game["word"]):
-        upd = DB.execute("UPDATE games SET solved=1 WHERE chat_id=? AND solved=0", (chat_id,))
-        if upd.rowcount != 1:
-            return
-        DB.commit()
-
-        ensure_user(message.from_user)
-        u = get_user(user_id)
-        s = get_settings(chat_id)
-        reward = get_global_config(f"points_{game['difficulty']}", 10)
-
-        new_streak = u["streak"] + 1
-        best = max(new_streak, u["best_streak"])
-
-        DB.execute("""
-            UPDATE users SET points=points+?, solved=solved+1, streak=?, best_streak=? WHERE user_id=?
-        """, (reward, new_streak, best, user_id))
-        DB.execute("""
-            INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)
-        """, (user_id, chat_id, reward, time.time()))
-        DB.commit()
-
-        if s["auto_delete"] and game["message_id"]:
-            await safe_delete_and_unpin(chat_id, game["message_id"])
-
-        u_mention = get_mention(message.from_user)
-        c_msg = await message.reply_text(
-            f"<blockquote>🎉 <b>UNSCRAMBLED!</b>\n\n"
-            f"👤 <b>Solver:</b> {u_mention}\n"
-            f"✅ <b>Word:</b> <code>{game['word'].upper()}</code>\n"
-            f"⭐ <b>Reward:</b> <code>+{reward} pts</code>\n"
-            f"🔥 <b>Combo Streak:</b> <code>{new_streak}</code></blockquote>\n\n"
-            f"<blockquote>🔄 <i>Next round starts in 3s...</i></blockquote>",
-            parse_mode=ParseMode.HTML
-        )
-        if s["auto_delete"]:
-            asyncio.create_task(delete_after(c_msg, 4))
-
-        await asyncio.sleep(3)
-        s = get_settings(chat_id)
-        if chat_id not in JUMBLE_FIGHT and s["is_active"]:
-            asyncio.create_task(start_game(chat_id, s["default_diff"], chat_id))
-
-# ============================================================
-# COMMAND DEFINITIONS
-# ============================================================
+    return formatted_card, kb
 
 @app.on_message(filters.command("start"))
 async def start_cmd(_, message: Message):
     ensure_user(message.from_user)
     text = (
-        "<blockquote>⚡ <b>ADVANCED JUMBLE ENGINE</b></blockquote>\n\n"
-        "<blockquote expandable>🎮 <b>Core Modes:</b>\n"
-        "• <code>/jumble</code> — Launch Auto-cycling Game Loop\n"
-        "• <code>/jumblefight @user</code> — Initiate 1v1 PvP Duel\n"
-        "• <code>/jumblebetfight [mode] [amount] @user</code> — High-Stakes Duel\n"
-        "• <code>/settings</code> — Group Difficulty & Timers Hub\n\n"
-        "🎁 <b>Rewards Hub:</b>\n"
-        "• <code>/daily</code> — Claim 24h bonus in DM\n"
-        "• <code>/bonus</code> — Claim group addition bonus\n\n"
-        "📊 <b>Telemetry:</b>\n"
-        "• <code>/stats [@user]</code> — Visual Dossier & Graph\n"
-        "• <code>/leaderboard</code> — Live Visual Hall of Fame</blockquote>"
+        "<b>┌── ⚡ ADVANCED JUMBLE ENGINE ──┐</b>\n"
+        "│ High-speed word unscrambling with\n"
+        "│ integrated 1v1 PvP combat arena.\n"
+        "<b>└────────────────────────────────┘</b>\n\n"
+        "<blockquote expandable>"
+        "🎮 <b>Battle Operations:</b>\n"
+        "• <code>/jumble</code> — Trigger game loop\n"
+        "• <code>/jumblefight @user</code> — Issue 1v1 Duel\n"
+        "• <code>/betfight [mode] [amt] @user</code> — High Stakes\n"
+        "• <code>/settings</code> — Admin configurations\n\n"
+        "📊 <b>Telemetry & Rewards:</b>\n"
+        "• <code>/stats [@user]</code> — Visual player dossier\n"
+        "• <code>/leaderboard</code> — Hall of fame\n"
+        "• <code>/daily</code> — 24h bonus in direct message\n"
+        "• <code>/bonus</code> — Group admin rewards"
+        "</blockquote>"
     )
 
     kb = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("💬 Support Channel", url=SUPPORT_GC),
-            InlineKeyboardButton("➕ Add to Group", url=ADD_ME_URL)
+            InlineKeyboardButton("💬 Support HQ", url=SUPPORT_GC),
+            InlineKeyboardButton("➕ Add Bot", url=ADD_ME_URL)
         ],
-        [
-            InlineKeyboardButton("˹ 𓆩ℛᴏ֟፝ᴏʜɪ ꭙ 𝐌ᴜ֟፝sɪᴄ𓆪˼ ♪", url=MUSIC_BOT_URL)
-        ]
+        [InlineKeyboardButton("˹ 𓆩ℛᴏ֟፝ᴏʜɪ ꭙ 𝐌ᴜ֟፝sɪᴄ𓆪˼ ♪", url=MUSIC_BOT_URL)]
     ])
 
     if message.chat.type == ChatType.PRIVATE:
@@ -1018,7 +903,7 @@ async def start_cmd(_, message: Message):
 async def jumble_cmd(_, message: Message):
     ensure_user(message.from_user)
     if message.chat.id in JUMBLE_FIGHT:
-        return await message.reply_text("<blockquote>⚔️ <b>PvP duel in progress. Please wait for conclusion.</b></blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply_text("<blockquote>⚔️ <b>PvP duel currently engaging. Wait for victory.</b></blockquote>", parse_mode=ParseMode.HTML)
 
     DB.execute("UPDATE settings SET is_active=1 WHERE chat_id=?", (message.chat.id,))
     DB.commit()
@@ -1029,20 +914,20 @@ async def jumble_cmd(_, message: Message):
     await start_game(message.chat.id, diff, message)
 
 @app.on_message(filters.command(["jumblefight", "fight"]))
-async def jumble_fight_cmd(_, message: Message):
+async def fight_cmd(_, message: Message):
     if not is_group(message):
-        return await message.reply_text("<blockquote>❌ Group execution only.</blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply_text("<blockquote>❌ Group engagement only.</blockquote>", parse_mode=ParseMode.HTML)
 
     target = await resolve_target_user(message)
     if not target or target.id == message.from_user.id or target.is_bot:
-        return await message.reply_text("<blockquote>❌ Tag a valid rival user to challenge.</blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply_text("<blockquote>❌ Mention or reply to a valid rival to challenge.</blockquote>", parse_mode=ParseMode.HTML)
 
     ensure_user(message.from_user)
     ensure_user(target)
     cid = message.chat.id
 
     if cid in JUMBLE_FIGHT:
-        return await message.reply_text("<blockquote>⚔️ Active fight already running.</blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply_text("<blockquote>⚔️ Active duel in progress.</blockquote>", parse_mode=ParseMode.HTML)
 
     FIGHT_LOBBY[cid] = {
         "p1": message.from_user.id,
@@ -1065,49 +950,49 @@ async def jumble_fight_cmd(_, message: Message):
         ],
         [
             InlineKeyboardButton("⏱️ 30s", callback_data="f_time_30"),
-            InlineKeyboardButton("⏱️ 45s", callback_data="f_time_45"),
             InlineKeyboardButton("⏱️ 60s", callback_data="f_time_60")
         ],
         [
-            InlineKeyboardButton("⚔️ Accept Challenge", callback_data="f_accept"),
+            InlineKeyboardButton("⚔️ Accept Duel", callback_data="f_accept"),
             InlineKeyboardButton("🚫 Decline", callback_data="f_decline")
         ]
     ])
 
     await message.reply_text(
-        f"<blockquote>⚔️ <b>PVP DUEL DISPATCHED!</b>\n\n"
-        f"👤 <b>Host:</b> {get_mention(message.from_user)}\n"
-        f"🎯 <b>Target:</b> {get_mention(target)}\n"
-        f"⚙️ <b>Config:</b> Medium Tier • 60s Round Clock\n\n"
-        f"👉 Rival must tap <b>Accept Challenge</b> below to initiate!</blockquote>",
+        f"<b>┌── ⚔️ DUEL CHALLENGE STAGED ──┐</b>\n"
+        f"│ 👤 <b>Initiator:</b> {get_mention(message.from_user)}\n"
+        f"│ 🎯 <b>Target:</b> {get_mention(target)}\n"
+        f"│ ⚙️ <b>Config:</b> Medium Tier • 60s Round Timer\n"
+        f"<b>└───────────────────────────────┘</b>\n\n"
+        f"<i>Rival must tap Accept below to commence!</i>",
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
 
 @app.on_message(filters.command(["jumblebetfight", "betfight"]))
-async def bet_fight_cmd(_, message: Message):
+async def bet_cmd(_, message: Message):
     if not is_group(message):
-        return await message.reply_text("<blockquote>❌ Group execution only.</blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply_text("<blockquote>❌ Group engagement only.</blockquote>", parse_mode=ParseMode.HTML)
 
     target = await resolve_target_user(message)
     if not target or target.id == message.from_user.id or target.is_bot:
-        return await message.reply_text("<blockquote>❌ Tag a valid rival user to bet against.</blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply_text("<blockquote>❌ Mention or reply to a valid rival to bet against.</blockquote>", parse_mode=ParseMode.HTML)
 
     amount = 100
     diff = "medium"
-    for arg in message.command[1:]:
-        if arg.isdigit() and int(arg) >= 100:
-            amount = int(arg)
-        elif arg.lower() in ("easy", "medium", "hard"):
-            diff = arg.lower()
+    for p in message.command[1:]:
+        if p.isdigit() and int(p) >= 100:
+            amount = int(p)
+        elif p.lower() in ("easy", "medium", "hard"):
+            diff = p.lower()
 
     u1 = get_user(message.from_user.id)
     u2 = get_user(target.id)
 
     if not u1 or u1["points"] < amount:
-        return await message.reply_text(f"<blockquote>❌ Insufficient points. Required: {amount} pts.</blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply_text(f"<blockquote>❌ Insufficient points ({amount} pts required).</blockquote>", parse_mode=ParseMode.HTML)
     if not u2 or u2["points"] < amount:
-        return await message.reply_text(f"<blockquote>❌ Target lacks required points balance ({amount} pts).</blockquote>", parse_mode=ParseMode.HTML)
+        return await message.reply_text(f"<blockquote>❌ Rival lacks balance ({amount} pts required).</blockquote>", parse_mode=ParseMode.HTML)
 
     cid = message.chat.id
     FIGHT_LOBBY[cid] = {
@@ -1134,24 +1019,130 @@ async def bet_fight_cmd(_, message: Message):
             InlineKeyboardButton("⏱️ 60s", callback_data="f_time_60")
         ],
         [
-            InlineKeyboardButton("💰 Accept High Stakes", callback_data="f_accept"),
+            InlineKeyboardButton("💰 Accept Stakes", callback_data="f_accept"),
             InlineKeyboardButton("🚫 Decline", callback_data="f_decline")
         ]
     ])
 
     await message.reply_text(
-        f"<blockquote>💰 <b>HIGH STAKES DUEL STAGED!</b>\n\n"
-        f"👤 <b>Host:</b> {get_mention(message.from_user)}\n"
-        f"🎯 <b>Rival:</b> {get_mention(target)}\n"
-        f"💵 <b>Stake:</b> <code>{amount:,} pts each</code> (Total Pot: <code>{amount * 2:,} pts</code>)\n"
-        f"🛡️ <b>Split:</b> 75% Victor Payout • 25% Loser Protection</blockquote>\n\n"
-        f"<blockquote expandable>Rival tap <b>Accept High Stakes</b> to begin!</blockquote>",
+        f"<b>┌── 💰 HIGH STAKES DUEL STAGED ──┐</b>\n"
+        f"│ 👤 <b>Host:</b> {get_mention(message.from_user)}\n"
+        f"│ 🎯 <b>Rival:</b> {get_mention(target)}\n"
+        f"│ 💵 <b>Stake:</b> <code>{amount:,} pts</code> (Pot: <code>{amount*2:,} pts</code>)\n"
+        f"│ 🛡️ <b>Split:</b> 75% Victor • 25% Cashback\n"
+        f"<b>└─────────────────────────────────┘</b>",
         reply_markup=kb,
         parse_mode=ParseMode.HTML
     )
 
 # ============================================================
-# CALLBACK ENGINE
+# CHAT ANSWER INGESTION (NON-BLOCKING)
+# ============================================================
+
+ALL_CMDS = {
+    "start", "help", "jumble", "jumblefight", "fight", "rapido", "jumblebetfight", "betfight",
+    "settings", "setting", "setpoints", "sethint", "setdaily", "setbonus", "daily", "bonus",
+    "private", "public", "addword", "addwords", "delword", "delallword", "delallwords",
+    "clearword", "clearwords", "word", "words", "auth", "unauth", "authlist", "update", "gitpull",
+    "stats", "stat", "mystats", "score", "profile", "leaderboard", "top", "rank", "lb"
+}
+
+@app.on_message(filters.text & filters.group, group=1)
+async def chat_message_verifier(_, message: Message):
+    if not message.from_user or not message.text:
+        return
+
+    txt = message.text.strip()
+    if txt.startswith(("/", "!", ".")):
+        candidate = txt[1:].split()[0].split("@")[0].lower()
+        if candidate in ALL_CMDS:
+            return
+
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    cleaned = clean_answer(txt)
+    if not cleaned:
+        return
+
+    # 1. Duel check
+    if chat_id in JUMBLE_FIGHT:
+        async with LOCK:
+            g = JUMBLE_FIGHT.get(chat_id)
+            if not g or user_id not in g["players"]:
+                return
+
+            if time.time() <= g["expires"] and cleaned == clean_answer(g["word"]):
+                curr = asyncio.current_task()
+                if g.get("task") and g["task"] is not curr and not g["task"].done():
+                    try:
+                        g["task"].cancel()
+                    except Exception:
+                        pass
+
+                g["scores"][user_id] += 1
+                s = get_settings(chat_id)
+                if s["auto_delete"] and g.get("msg_id"):
+                    await safe_delete_and_unpin(chat_id, g["msg_id"])
+
+                u_mention = get_mention(message.from_user)
+                r_msg = await message.reply_text(
+                    f"<blockquote>⚡ <b>ROUND WON BY {u_mention}!</b> Score: <code>{g['scores'][user_id]} pts</code></blockquote>",
+                    parse_mode=ParseMode.HTML
+                )
+                if s["auto_delete"]:
+                    asyncio.create_task(delete_after(r_msg, 4))
+
+                await asyncio.sleep(2)
+                asyncio.create_task(fight_next(chat_id))
+                return
+        return
+
+    # 2. Main Game Loop Check
+    g_row = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (chat_id,)).fetchone()
+    if not g_row or time.time() > g_row["expires"]:
+        return
+
+    if cleaned == clean_answer(g_row["word"]):
+        upd = DB.execute("UPDATE games SET solved=1 WHERE chat_id=? AND solved=0", (chat_id,))
+        if upd.rowcount != 1:
+            return
+        DB.commit()
+
+        ensure_user(message.from_user)
+        u = get_user(user_id)
+        s = get_settings(chat_id)
+        reward = get_global_config(f"points_{g_row['difficulty']}", 10)
+
+        new_streak = u["streak"] + 1
+        best = max(new_streak, u["best_streak"])
+
+        DB.execute("UPDATE users SET points=points+?, solved=solved+1, streak=?, best_streak=? WHERE user_id=?", (reward, new_streak, best, user_id))
+        DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (user_id, chat_id, reward, time.time()))
+        DB.commit()
+
+        if s["auto_delete"] and g_row["message_id"]:
+            await safe_delete_and_unpin(chat_id, g_row["message_id"])
+
+        u_mention = get_mention(message.from_user)
+        c_msg = await message.reply_text(
+            f"<b>┌── 🎉 UNSCRAMBLED! ──┐</b>\n"
+            f"│ 👤 <b>Solver:</b> {u_mention}\n"
+            f"│ ✅ <b>Word:</b> <code>{g_row['word'].upper()}</code>\n"
+            f"│ ⭐ <b>Bounty:</b> <code>+{reward} pts</code>\n"
+            f"│ 🔥 <b>Streak:</b> <code>{new_streak}</code>\n"
+            f"<b>└─────────────────────┘</b>",
+            parse_mode=ParseMode.HTML
+        )
+        if s["auto_delete"]:
+            asyncio.create_task(delete_after(c_msg, 4))
+
+        await asyncio.sleep(3)
+        s = get_settings(chat_id)
+        if chat_id not in JUMBLE_FIGHT and s["is_active"]:
+            asyncio.create_task(start_game(chat_id, s["default_diff"], chat_id))
+
+# ============================================================
+# CALLBACK ROUTER
 # ============================================================
 
 @app.on_callback_query()
@@ -1190,12 +1181,12 @@ async def callback_router(_, query: CallbackQuery):
         DB.commit()
 
         letter = g["word"][idx].upper()
-        return await query.answer(f"💡 Letter #{idx+1} is '{letter}' ({limit - hints_used} hints remaining)", show_alert=True)
+        return await query.answer(f"💡 Letter #{idx+1} is '{letter}' ({limit - hints_used} hints left)", show_alert=True)
 
     elif data == "fight_hint":
         g = JUMBLE_FIGHT.get(cid)
         if not g or uid not in g["players"]:
-            return await query.answer("Combatants only.", show_alert=True)
+            return await query.answer("Duel combatants only.", show_alert=True)
 
         left = g["hints_left"].get(uid, 0)
         if left <= 0:
@@ -1205,7 +1196,7 @@ async def callback_router(_, query: CallbackQuery):
         rev = g["round_revealed"][uid]
         avail = [i for i in range(len(w)) if i not in rev]
         if not avail:
-            return await query.answer("All letters currently shown.", show_alert=True)
+            return await query.answer("All characters currently exposed.", show_alert=True)
 
         idx = random.choice(avail)
         rev.append(idx)
@@ -1218,24 +1209,36 @@ async def callback_router(_, query: CallbackQuery):
         scope = parts[1]
         target_cid = int(parts[2])
 
-        title, rows = fetch_leaderboard_data(scope, target_cid)
-        text = f"<blockquote>🏆 <b>{title}</b>\n\n"
-        if not rows:
-            text += "<i>No records logged yet.</i>"
-        else:
-            medals = ["🥇", "🥈", "🥉"]
-            for i, u in enumerate(rows, 1):
-                badge = medals[i - 1] if i <= 3 else f"<code>{i:02d}.</code>"
-                u_name = html.escape(str(u["name"] or "Player"))
-                entry = f"<b>{u_name}</b>" if u["is_private"] else f"<a href='tg://openmessage?user_id={u['user_id']}'>{u_name}</a>"
-                text += f"{badge} {entry} — <code>{u['total_pts']:,} pts</code>\n"
-        text += "</blockquote>"
-
-        kb = build_leaderboard_markup(scope, target_cid)
+        text, kb = build_rich_leaderboard(scope, target_cid)
         try:
-            await query.message.edit_caption(caption=text, reply_markup=kb, parse_mode=ParseMode.HTML)
+            await query.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         except MessageNotModified:
             pass
+
+    elif data == "skip":
+        if not await is_admin_or_owner(query.message.chat, uid):
+            return await query.answer("Admin permission required to skip.", show_alert=True)
+
+        g = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (cid,)).fetchone()
+        if not g:
+            return await query.answer("No active puzzle.", show_alert=True)
+
+        DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (cid,))
+        DB.commit()
+
+        await query.answer("Puzzle bypassed.")
+        s = get_settings(cid)
+        if s["is_active"]:
+            asyncio.create_task(start_game(cid, s["default_diff"], query.message))
+
+    elif data == "newword":
+        g = DB.execute("SELECT * FROM games WHERE chat_id=? AND solved=0", (cid,)).fetchone()
+        if g and time.time() <= g["expires"]:
+            return await query.answer("Active puzzle is currently in progress.", show_alert=True)
+
+        s = get_settings(cid)
+        await query.answer("Cycling new puzzle...")
+        asyncio.create_task(start_game(cid, s["default_diff"], query.message))
 
     elif data.startswith("f_"):
         lobby = FIGHT_LOBBY.get(cid)
@@ -1251,7 +1254,7 @@ async def callback_router(_, query: CallbackQuery):
 
         if data == "f_accept":
             if uid != lobby["p2"]:
-                return await query.answer("Only challenged player may accept.", show_alert=True)
+                return await query.answer("Only the rival player can accept.", show_alert=True)
 
             if lobby["is_bet"]:
                 amt = lobby["bet_amount"]
@@ -1259,7 +1262,7 @@ async def callback_router(_, query: CallbackQuery):
                 u2 = get_user(lobby["p2"])
                 if u1["points"] < amt or u2["points"] < amt:
                     del FIGHT_LOBBY[cid]
-                    return await query.message.edit_text("<blockquote>❌ Stakes balance check failed. Canceled.</blockquote>", parse_mode=ParseMode.HTML)
+                    return await query.message.edit_text("<blockquote>❌ Balance check failure. Duel canceled.</blockquote>", parse_mode=ParseMode.HTML)
 
                 DB.execute("UPDATE users SET points=points-? WHERE user_id=?", (amt, lobby["p1"]))
                 DB.execute("UPDATE users SET points=points-? WHERE user_id=?", (amt, lobby["p2"]))
@@ -1288,7 +1291,7 @@ async def callback_router(_, query: CallbackQuery):
             }
             del FIGHT_LOBBY[cid]
             await query.message.delete()
-            await query.answer("Duel Accepted!")
+            await query.answer("⚔️ Duel Activated!")
             asyncio.create_task(fight_next(cid))
 
         elif data.startswith("f_diff_"):
@@ -1302,7 +1305,7 @@ async def callback_router(_, query: CallbackQuery):
         await query.message.delete()
 
 # ============================================================
-# START ENGINE
+# BOOT SEQUENCE
 # ============================================================
 
 async def resume_all_games():
@@ -1318,6 +1321,6 @@ async def resume_all_games():
             pass
 
 if __name__ == "__main__":
-    print("✨ Advanced Rich Jumble Bot is starting...")
+    print("🚀 Advanced Rich Jumble Bot is starting...")
     asyncio.get_event_loop().create_task(resume_all_games())
     app.run()
