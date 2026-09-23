@@ -245,7 +245,7 @@ def run_migrations():
         DB.execute("ALTER TABLE score_history ADD COLUMN tag TEXT DEFAULT 'normal'")
 
     for ew in rich.DEFAULT_EVENT:
-        DB.execute("INSERT OR IGNORE INTO event_words (word) VALUES (?, ?)", (ew.lower().strip(),)) if False else DB.execute("INSERT OR IGNORE INTO event_words (word) VALUES (?)", (ew.lower().strip(),))
+        DB.execute("INSERT OR IGNORE INTO event_words (word) VALUES (?)", (ew.lower().strip(),))
 
     DB.commit()
 
@@ -347,6 +347,10 @@ def choose_word(chat_id, difficulty):
     DB.commit()
     return word
 
+def calculate_level(exp: int) -> int:
+    step = get_global_config("global_exp_per_lvl", 500)
+    return max(1, (exp // step) + 1)
+
 async def send_log_notification(chat_obj, user_obj, word, pts_gained, exp_gained, total_points, total_exp, level, is_event=False):
     s = get_settings(chat_obj.id)
     if not s["logging_enabled"]:
@@ -396,7 +400,7 @@ async def start_game(chat_id, difficulty, message_or_chat):
 
     old_game = DB.execute("SELECT message_id FROM games WHERE chat_id=?", (chat_id,)).fetchone()
     if old_game and settings["auto_delete"] and old_game["message_id"]:
-        await rich.safe_delete_and_unpin(chat_id, old_game["message_id"])
+        await rich.safe_delete_and_unpin(chat_id, old_game["message_id"], app)
 
     DB.execute("DELETE FROM games WHERE chat_id=?", (chat_id,))
     word = choose_word(chat_id, difficulty)
@@ -456,7 +460,7 @@ async def expire_game(chat_id, puzzle_id, expires):
 
     s = get_settings(chat_id)
     if s["auto_delete"] and row["message_id"]:
-        await rich.safe_delete_and_unpin(chat_id, row["message_id"])
+        await rich.safe_delete_and_unpin(chat_id, row["message_id"], app)
 
     try:
         exp_msg = await app.send_message(
@@ -518,7 +522,7 @@ async def dispatch_event_by_id(event_id, target_chat_id=None):
         try:
             old_ev = DB.execute("SELECT message_id FROM event_games WHERE chat_id=?", (tid,)).fetchone()
             if old_ev and old_ev["message_id"]:
-                await rich.safe_delete_and_unpin(tid, old_ev["message_id"])
+                await rich.safe_delete_and_unpin(tid, old_ev["message_id"], app)
             DB.execute("DELETE FROM event_games WHERE chat_id=?", (tid,))
             DB.commit()
 
@@ -559,7 +563,7 @@ async def expire_event_game(chat_id, puzzle_id, expires):
     DB.commit()
 
     if row["message_id"]:
-        await rich.safe_delete_and_unpin(chat_id, row["message_id"])
+        await rich.safe_delete_and_unpin(chat_id, row["message_id"], app)
 
     try:
         t_msg = await app.send_message(
@@ -570,6 +574,28 @@ async def expire_event_game(chat_id, puzzle_id, expires):
         asyncio.create_task(rich.delete_after(t_msg, 5))
     except Exception:
         pass
+
+# ============================================================
+# DATABASE BACKUP SYSTEM
+# ============================================================
+
+async def auto_backup_task():
+    while True:
+        await asyncio.sleep(21600)  # 6 Hours
+        try:
+            if os.path.exists("jumble_game.db"):
+                await app.send_document(
+                    chat_id=OWNER_ID,
+                    document="jumble_game.db",
+                    caption=(
+                        "<blockquote>🤖 <b>𝐀𝐔𝐓𝐎 𝐃𝐀𝐓𝐀𝐁𝐀𝐒𝐄 𝐁𝐀𝐂𝐊𝐔𝐏 (6h Interval)</b>\n\n"
+                        f"⏰ <b>Time:</b> <code>{time.strftime('%Y-%m-%d %H:%M:%S')}</code>\n"
+                        "Agar VPS achanak band ho jaye toh yeh file use karein.</blockquote>"
+                    ),
+                    parse_mode=ParseMode.HTML
+                )
+        except Exception as e:
+            print(f"Auto-backup error: {e}")
 
 # ============================================================
 # JUMBLE FIGHT (1v1) & BET FIGHT ENGINE
@@ -588,7 +614,7 @@ async def fight_timeout_task(chat_id, round_num, timer_duration):
             word = game["word"]
             s = get_settings(chat_id)
             if s["auto_delete"] and game.get("msg_id"):
-                await rich.safe_delete_and_unpin(chat_id, game["msg_id"])
+                await rich.safe_delete_and_unpin(chat_id, game["msg_id"], app)
 
             try:
                 t_msg = await app.send_message(
@@ -678,7 +704,7 @@ async def finish_fight(chat_id):
 
     s = get_settings(chat_id)
     if s["auto_delete"] and game.get("msg_id"):
-        await rich.safe_delete_and_unpin(chat_id, game["msg_id"])
+        await rich.safe_delete_and_unpin(chat_id, game["msg_id"], app)
 
     p1, p2 = game["players"]
     s1, s2 = game["scores"][p1], game["scores"][p2]
@@ -825,7 +851,6 @@ async def broadcast_cmd_handler(client: Client, message: Message):
 
     success = 0
     failed = 0
-
     sender_client = assistant if (use_assistant and no_bot) else client
 
     for idx, tid in enumerate(targets, 1):
@@ -957,6 +982,169 @@ async def set_store_exp_prize_cmd(_, message: Message):
     set_global_config("shop_exp_reward", nums[1])
     await message.reply_text(f"<blockquote>✅ <b>Shop EXP Pack set: {nums[0]} stars for {nums[1]} EXP!</b></blockquote>", parse_mode=ParseMode.HTML)
 
+@app.on_message(filters.command(["addstar", "addpoints"]))
+async def addstar_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Sirf Authorized users points add kar sakte hain.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    args = message.command[1:]
+    target = None
+    amount = 0
+
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target = message.reply_to_message.from_user
+        for a in args:
+            if a.isdigit():
+                amount = int(a)
+                break
+    elif len(args) >= 2:
+        user_param = args[0]
+        try:
+            target = await app.get_users(int(user_param) if user_param.isdigit() else user_param)
+        except Exception:
+            pass
+        for a in args[1:]:
+            if a.isdigit():
+                amount = int(a)
+                break
+
+    if not target or amount <= 0:
+        return await message.reply_text("<blockquote>⭐ <b>Usage:</b>\n• <code>/addstar @username 100</code>\n• Reply to user: <code>/addstar 100</code></blockquote>", parse_mode=ParseMode.HTML)
+
+    ensure_user(target)
+    now = time.time()
+    chat_id = message.chat.id if is_group(message) else 0
+
+    DB.execute("UPDATE users SET points = points + ? WHERE user_id = ?", (amount, target.id))
+    DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (target.id, chat_id, amount, now))
+    DB.commit()
+
+    u = get_user(target.id)
+    await message.reply_text(
+        f"<blockquote>⭐ <b>STARS ADDED!</b>\n\n"
+        f"👤 <b>User:</b> {rich.get_mention(target)} (<code>{target.id}</code>)\n"
+        f"➕ <b>Added:</b> <code>+{amount} points</code>\n"
+        f"💰 <b>Total Balance:</b> <code>{u['points']} points</code></blockquote>",
+        parse_mode=ParseMode.HTML
+    )
+
+@app.on_message(filters.command(["deductstar", "deductpoints", "removestar"]))
+async def deductstar_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Sirf Authorized users points deduct kar sakte hain.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    args = message.command[1:]
+    target = None
+    amount = 0
+
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target = message.reply_to_message.from_user
+        for a in args:
+            if a.isdigit():
+                amount = int(a)
+                break
+    elif len(args) >= 2:
+        user_param = args[0]
+        try:
+            target = await app.get_users(int(user_param) if user_param.isdigit() else user_param)
+        except Exception:
+            pass
+        for a in args[1:]:
+            if a.isdigit():
+                amount = int(a)
+                break
+
+    if not target or amount <= 0:
+        return await message.reply_text("<blockquote>🛡️ <b>Usage:</b>\n• <code>/deductstar @username 50</code>\n• Reply to user: <code>/deductstar 50</code></blockquote>", parse_mode=ParseMode.HTML)
+
+    ensure_user(target)
+    u = get_user(target.id)
+    current_points = u["points"] if u else 0
+    actual_deduct = min(current_points, amount)
+    now = time.time()
+    chat_id = message.chat.id if is_group(message) else 0
+
+    DB.execute("UPDATE users SET points = points - ? WHERE user_id = ?", (actual_deduct, target.id))
+    DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (target.id, chat_id, -actual_deduct, now))
+    DB.commit()
+
+    u_updated = get_user(target.id)
+    await message.reply_text(
+        f"<blockquote>🛡️ <b>STARS DEDUCTED!</b>\n\n"
+        f"👤 <b>User:</b> {rich.get_mention(target)} (<code>{target.id}</code>)\n"
+        f"➖ <b>Deducted:</b> <code>-{actual_deduct} points</code>\n"
+        f"💰 <b>Total Balance:</b> <code>{u_updated['points']} points</code></blockquote>",
+        parse_mode=ParseMode.HTML
+    )
+
+@app.on_message(filters.command(["calculate", "calc", "audit"]))
+async def calculate_player_cmd(_, message: Message):
+    if not message.from_user or not is_authed(message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Sirf Authorized users audit calculate kar sakte hain.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    target_user = message.from_user
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target_user = message.reply_to_message.from_user
+    elif len(message.command) >= 2:
+        arg = message.command[1]
+        try:
+            target_user = await app.get_users(int(arg) if arg.isdigit() else arg)
+        except Exception:
+            pass
+
+    ensure_user(target_user)
+    uid = target_user.id
+    u = get_user(uid)
+
+    easy_pts = DB.execute("SELECT SUM(points) as s, COUNT(*) as c FROM score_history WHERE user_id=? AND tag='easy'", (uid,)).fetchone()
+    med_pts = DB.execute("SELECT SUM(points) as s, COUNT(*) as c FROM score_history WHERE user_id=? AND tag='medium'", (uid,)).fetchone()
+    hard_pts = DB.execute("SELECT SUM(points) as s, COUNT(*) as c FROM score_history WHERE user_id=? AND tag='hard'", (uid,)).fetchone()
+    fight_pts = DB.execute("SELECT SUM(points) as s FROM score_history WHERE user_id=? AND tag='bet_fight'", (uid,)).fetchone()
+    event_pts = DB.execute("SELECT SUM(points) as s FROM score_history WHERE user_id=? AND tag='event'", (uid,)).fetchone()
+
+    e_total = easy_pts["s"] or 0
+    e_cnt = easy_pts["c"] or 0
+    m_total = med_pts["s"] or 0
+    m_cnt = med_pts["c"] or 0
+    h_total = hard_pts["s"] or 0
+    h_cnt = hard_pts["c"] or 0
+    f_total = fight_pts["s"] or 0
+    ev_total = event_pts["s"] or 0
+
+    await message.reply_text(
+        f"<blockquote>📊 <b>PLAYER AUDIT & STATS</b>\n\n"
+        f"👤 <b>Player:</b> {rich.get_mention(target_user)} (<code>{uid}</code>)\n"
+        f"🎖️ <b>Level:</b> <code>Level {u['level']}</code> (<code>{u['exp']} EXP</code>)\n"
+        f"💰 <b>Net Balance:</b> ⭐ <code>{u['points']} Stars</code>\n\n"
+        f"🟢 <b>Easy Solved:</b> <code>{e_cnt}</code> (⭐ <code>{e_total} pts</code>)\n"
+        f"🟡 <b>Medium Solved:</b> <code>{m_cnt}</code> (⭐ <code>{m_total} pts</code>)\n"
+        f"🔴 <b>Hard Solved:</b> <code>{h_cnt}</code> (⭐ <code>{h_total} pts</code>)\n"
+        f"🌟 <b>Event Gains:</b> ⭐ <code>{ev_total} pts</code>\n"
+        f"⚔️ <b>Fights Record:</b> <code>{u['fight_wins']}W - {u['fight_losses']}L</code>\n"
+        f"🎲 <b>Bet Fights Record:</b> <code>{u['bet_wins']}W - {u['bet_losses']}L</code> (⭐ <code>{f_total} pts net</code>)</blockquote>",
+        parse_mode=ParseMode.HTML
+    )
+
+@app.on_message(filters.command(["log", "logging"]))
+async def log_toggle_cmd(_, message: Message):
+    if not message.from_user or not await is_admin_or_owner(message.chat, message.from_user.id):
+        return await message.reply_text("<blockquote>❌ <b>Only group admins or bot owner can toggle logs.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+    args = message.command[1:]
+    s = get_settings(message.chat.id)
+
+    if args and args[0].lower() in ("on", "enable", "true"):
+        new_val = 1
+    elif args and args[0].lower() in ("off", "disable", "false"):
+        new_val = 0
+    else:
+        new_val = 0 if s["logging_enabled"] else 1
+
+    DB.execute("UPDATE settings SET logging_enabled=? WHERE chat_id=?", (new_val, message.chat.id))
+    DB.commit()
+    st_text = "ENABLED" if new_val else "DISABLED"
+    await message.reply_text(f"<blockquote>📡 <b>Logger Group Notifications: <code>{st_text}</code> for this chat!</b></blockquote>", parse_mode=ParseMode.HTML)
+
 @app.on_message(filters.command("stats"))
 async def stats_cmd_handler(_, message: Message):
     target_user = message.from_user
@@ -1086,7 +1274,7 @@ async def universal_text_dispatcher(_, message: Message):
         DB.commit()
 
         if ev_game["message_id"]:
-            await rich.safe_delete_and_unpin(chat_id, ev_game["message_id"])
+            await rich.safe_delete_and_unpin(chat_id, ev_game["message_id"], app)
 
         await message.reply_text(f"<blockquote>🎉 <b>EVENT PUZZLE SOLVED!</b>\n\n👤 {rich.get_mention(message.from_user)}\n✅ <b>Word:</b> <code>{ev_game['word'].upper()}</code>\n⭐ <b>+{b_pts} stars</b> | ⚡ <b>+{b_exp} EXP</b></blockquote>", parse_mode=ParseMode.HTML)
         asyncio.create_task(send_log_notification(message.chat, message.from_user, ev_game["word"], b_pts, b_exp, u['points'] + b_pts, new_exp, new_lvl, is_event=True))
@@ -1107,7 +1295,7 @@ async def universal_text_dispatcher(_, message: Message):
         DB.commit()
 
         if game["message_id"]:
-            await rich.safe_delete_and_unpin(chat_id, game["message_id"])
+            await rich.safe_delete_and_unpin(chat_id, game["message_id"], app)
 
         await message.reply_text(
             f"<blockquote>🎉 <b>CORRECT!</b>\n\n👤 {rich.get_mention(message.from_user)}\n✅ <b>Answer:</b> <code>{game['word'].upper()}</code>\n⭐ <b>+{pts} points</b> | ⚡ <b>+{exp_gain} EXP</b> (Lvl {new_lvl})</blockquote>",
@@ -1183,6 +1371,26 @@ async def callback_router(_, query: CallbackQuery):
 
     elif data == "open_shop_btn" or data == "refresh_shop":
         ensure_user(query.from_user)
+        text, kb = rich.build_shop_text_and_kb(user_id)
+        return await query.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+    elif data.startswith("buy_card_"):
+        ensure_user(query.from_user)
+        u = get_user(user_id)
+        card_type = data.split("_")[2]
+        prefix = "card_point" if card_type == "point" else "card_level"
+        price = get_global_config(f"{prefix}_price", 500)
+        hrs = get_global_config(f"{prefix}_hrs", 3)
+        min_lvl = get_global_config(f"{prefix}_req_lvl", 1)
+
+        if (u["level"] or 1) < min_lvl or (u["points"] or 0) < price:
+            return await query.message.reply_text("<blockquote>❌ <b>Required Level ya Stars poore nahi hain.</b></blockquote>", parse_mode=ParseMode.HTML)
+
+        field = "point_card_exp" if card_type == "point" else "level_card_exp"
+        cur_exp = u[field] if u[field] and u[field] > now else now
+        DB.execute(f"UPDATE users SET points = points - ?, {field} = ? WHERE user_id = ?", (price, cur_exp + (hrs * 3600), user_id))
+        DB.execute("INSERT INTO score_history (user_id, chat_id, points, tag, timestamp) VALUES (?, 0, ?, 'shop_card', ?)", (user_id, -price, now))
+        DB.commit()
         text, kb = rich.build_shop_text_and_kb(user_id)
         return await query.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
