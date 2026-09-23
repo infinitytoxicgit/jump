@@ -285,27 +285,6 @@ def build_leaderboard_keyboard(scope_type, chat_id):
         ]
     ])
 
-def build_word_bank_keyboard(diff, page, total_pages):
-    nav_row = []
-    if page > 1:
-        nav_row.append(InlineKeyboardButton("⬅️ 𝐏ʀᴇᴠ", callback_data=f"wb_{diff}_{page - 1}"))
-    nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="noop_page"))
-    if page < total_pages:
-        nav_row.append(InlineKeyboardButton("𝐍ᴇxᴛ ➡️", callback_data=f"wb_{diff}_{page + 1}"))
-
-    return InlineKeyboardMarkup([
-        nav_row,
-        [
-            InlineKeyboardButton("🟢 𝐄ᴀsʏ", callback_data="wb_easy_1"),
-            InlineKeyboardButton("🟡 𝐌ᴇᴅɪᴜᴍ", callback_data="wb_medium_1"),
-            InlineKeyboardButton("🔴 𝐇ᴀʀᴅ", callback_data="wb_hard_1")
-        ],
-        [
-            InlineKeyboardButton("🔙 𝐁ᴀᴄᴋ ᴛᴏ 𝐌ᴇɴᴜ", callback_data="back_to_words_menu"),
-            InlineKeyboardButton("❌ 𝐂ʟᴏsᴇ", callback_data="close_panel")
-        ]
-    ])
-
 def build_broadcast_status_text(total_served, success_count, failed_count, mode_flags, is_complete=False):
     status_icon = "✅" if is_complete else "⏳"
     header = "ʙʀσᴧᴅᴄᴧsᴛ ᴄσϻᴘʟєᴛєᴅ" if is_complete else "ʙʀσᴧᴅᴄᴧsᴛɪηɢ ɪη ᴘʀσɢʀєss"
