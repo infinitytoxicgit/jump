@@ -2,8 +2,50 @@ import html
 import io
 import os
 import random
+import re
 from PIL import Image, ImageDraw, ImageFont
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+
+# ============================================================
+# WORD BANKS
+# ============================================================
+
+DEFAULT_EASY = """
+apple banana orange mango table chair house water school friend family
+happy garden flower animal window bottle mobile computer summer winter
+river music movie player football cricket doctor teacher market village
+country morning evening coffee bread pizza camera phone pencil paper
+train bus road car earth world light night star cloud rain green blue
+black white tiger lion horse rabbit monkey fish bird tree fruit
+""".split()
+
+DEFAULT_MEDIUM = """
+adventure beautiful knowledge education important dangerous different
+experience friendship happiness technology information internet
+mountain waterfall sunshine keyboard hospital university restaurant
+football cricket championship tournament engineer scientist medicine
+history geography language computer network application database
+security password community discussion entertainment television
+photography creativity imagination discovery opportunity challenge
+journey traveler vacation airport railway newspaper magazine
+""".split()
+
+DEFAULT_HARD = """
+extraordinary responsibility communication determination independence
+international transformation understanding environment intelligence
+architecture investigation recommendation administration opportunity
+entrepreneurship cryptocurrency cybersecurity authentication
+programming mathematics biotechnology astrophysics psychology
+philosophy civilization transportation infrastructure globalization
+misunderstanding pronunciation encyclopedia experimentation
+electromagnetism thermodynamics interoperability decentralization
+""".split()
+
+DEFAULT_EVENT = """
+supernova quantum singularity kaleidoscope cryptocurrency metamorphic
+photosynthesis transcendence bioluminescent counterrevolutionary
+electroencephalography compartmentalization
+""".split()
 
 # ============================================================
 # FONT & IMAGE ASSET HELPERS
@@ -84,6 +126,38 @@ def format_lb_entry(user_id, name, username, is_private):
     if username:
         return f"<a href='https://t.me/{username}'>{clean_name}</a> (<code>{user_id}</code>)"
     return f"<a href='tg://openmessage?user_id={user_id}'>{clean_name}</a> (<code>{user_id}</code>)"
+
+def jumble_word(word):
+    letters = list(word)
+    for _ in range(50):
+        random.shuffle(letters)
+        result = "".join(letters)
+        if result != word and result[::-1] != word:
+            return result.upper()
+    return "".join(letters).upper()
+
+# ============================================================
+# ASYNC SAFE DELETE & UNPIN HELPERS
+# ============================================================
+
+async def delete_after(msg: Message, delay: int = 5):
+    await asyncio.sleep(delay)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+async def safe_delete_and_unpin(chat_id: int, message_id: int, client_app=None):
+    if not message_id or not client_app:
+        return
+    try:
+        await client_app.unpin_chat_message(chat_id, message_id)
+    except Exception:
+        pass
+    try:
+        await client_app.delete_messages(chat_id, message_id)
+    except Exception:
+        pass
 
 # ============================================================
 # INLINE KEYBOARD MARKUPS
