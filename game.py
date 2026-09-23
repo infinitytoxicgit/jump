@@ -9,7 +9,7 @@ import sys
 import time
 from collections import defaultdict
 
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.enums import ChatType, ChatMemberStatus, ParseMode
 from pyrogram.errors import (
     MessageNotModified,
@@ -75,7 +75,7 @@ DB.row_factory = sqlite3.Row
 LOCK = asyncio.Lock()
 
 # ============================================================
-# DATABASE SETUP & MIGRATIONS
+# DATABASE SETUP & SAFE COLUMN MIGRATIONS
 # ============================================================
 
 DB.executescript("""
@@ -144,18 +144,6 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS bot_config (
     key TEXT PRIMARY KEY,
     value INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS group_adders (
-    chat_id INTEGER PRIMARY KEY,
-    user_id INTEGER,
-    added_at REAL
-);
-
-CREATE TABLE IF NOT EXISTS group_bonus (
-    chat_id INTEGER PRIMARY KEY,
-    user_id INTEGER,
-    claimed_at REAL
 );
 
 CREATE TABLE IF NOT EXISTS games (
@@ -234,6 +222,23 @@ def run_migrations():
     for k, v in defaults.items():
         DB.execute("INSERT OR IGNORE INTO bot_config (key, value) VALUES (?, ?)", (k, v))
 
+    user_cols = [c[1] for c in DB.execute("PRAGMA table_info(users)").fetchall()]
+    cols_to_add = {
+        "exp": "INTEGER DEFAULT 0",
+        "level": "INTEGER DEFAULT 1",
+        "point_card_exp": "REAL DEFAULT 0",
+        "level_card_exp": "REAL DEFAULT 0",
+        "is_private": "INTEGER DEFAULT 0",
+        "last_daily": "REAL DEFAULT 0",
+        "fight_wins": "INTEGER DEFAULT 0",
+        "fight_losses": "INTEGER DEFAULT 0",
+        "bet_wins": "INTEGER DEFAULT 0",
+        "bet_losses": "INTEGER DEFAULT 0"
+    }
+    for col, c_type in cols_to_add.items():
+        if col not in user_cols:
+            DB.execute(f"ALTER TABLE users ADD COLUMN {col} {c_type}")
+
     settings_cols = [c[1] for c in DB.execute("PRAGMA table_info(settings)").fetchall()]
     if "logging_enabled" not in settings_cols:
         DB.execute("ALTER TABLE settings ADD COLUMN logging_enabled INTEGER DEFAULT 1")
@@ -284,7 +289,10 @@ def ensure_user(user):
     DB.commit()
 
 def get_user(user_id):
-    return DB.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+    row = DB.execute("SELECT * FROM users WHERE user_id=?", (user_id,)).fetchone()
+    if row:
+        return dict(row)
+    return None
 
 def is_owner(user_id):
     return int(user_id) == int(OWNER_ID) if user_id else False
@@ -385,6 +393,50 @@ async def send_log_notification(chat_obj, user_obj, word, pts_gained, exp_gained
         await app.send_message(LOGGER_GROUP_ID, log_text, reply_markup=InlineKeyboardMarkup([btn_row]), parse_mode=ParseMode.HTML)
     except Exception as e:
         print(f"Logger error: {e}")
+
+def build_shop_text_and_kb(user_id):
+    u = get_user(user_id) or {}
+    now = time.time()
+    pt_price = get_global_config("card_point_price", 500)
+    pt_hrs = get_global_config("card_point_hrs", 3)
+    pt_req = get_global_config("card_point_req_lvl", 1)
+    lvl_price = get_global_config("card_level_price", 600)
+    lvl_hrs = get_global_config("card_level_hrs", 3)
+    lvl_req = get_global_config("card_level_req_lvl", 2)
+    exp_cost = get_global_config("shop_exp_cost", 1000)
+    exp_rew = get_global_config("shop_exp_reward", 500)
+    step = get_global_config("global_exp_per_lvl", 500)
+
+    p_exp = u.get("point_card_exp", 0) or 0
+    l_exp = u.get("level_card_exp", 0) or 0
+    pt_status = rich.format_duration(p_exp - now) if p_exp > now else "Inactive"
+    lvl_status = rich.format_duration(l_exp - now) if l_exp > now else "Inactive"
+    user_pts = u.get("points", 0) or 0
+    user_lvl = u.get("level", 1) or 1
+    user_exp = u.get("exp", 0) or 0
+
+    text = (
+        f"<blockquote>🛍️ <b>JUMBLE POWER & EXP SHOP</b>\n\n"
+        f"👤 <b>Balance:</b> ⭐ <code>{user_pts} stars</code>\n"
+        f"🎖️ <b>Rank:</b> Level <code>{user_lvl}</code> (<code>{user_exp % step}/{step} EXP</code>)\n\n"
+        f"⚡ <b>Active Powers:</b>\n"
+        f"• 2x Point Booster: <code>{pt_status}</code>\n"
+        f"• 2x Level Booster: <code>{lvl_status}</code>\n\n"
+        f"🃏 <b>Store Items:</b>\n"
+        f"1️⃣ <b>Point Multiplier (2x Points)</b> — ⭐ <code>{pt_price} stars</code> ({pt_hrs}h, Req Lvl {pt_req})\n"
+        f"2️⃣ <b>Level Multiplier (2x EXP)</b> — ⭐ <code>{lvl_price} stars</code> ({lvl_hrs}h, Req Lvl {lvl_req})\n"
+        f"3️⃣ <b>Instant +{exp_rew} EXP Pack</b> — ⭐ <code>{exp_cost} stars</code></blockquote>"
+    )
+
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"⚡ Buy 2x Point ({pt_price} ⭐)", callback_data="buy_card_point"),
+            InlineKeyboardButton(f"🎖️ Buy 2x EXP ({lvl_price} ⭐)", callback_data="buy_card_level")
+        ],
+        [InlineKeyboardButton(f"✨ Instant +{exp_rew} EXP ({exp_cost} ⭐)", callback_data="buy_instant_exp")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_shop"), InlineKeyboardButton("❌ Close", callback_data="close_panel")]
+    ])
+    return text, kb
 
 # ============================================================
 # GAME CORE
@@ -1019,12 +1071,12 @@ async def addstar_cmd(_, message: Message):
     DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (target.id, chat_id, amount, now))
     DB.commit()
 
-    u = get_user(target.id)
+    u = get_user(target.id) or {}
     await message.reply_text(
         f"<blockquote>⭐ <b>STARS ADDED!</b>\n\n"
         f"👤 <b>User:</b> {rich.get_mention(target)} (<code>{target.id}</code>)\n"
         f"➕ <b>Added:</b> <code>+{amount} points</code>\n"
-        f"💰 <b>Total Balance:</b> <code>{u['points']} points</code></blockquote>",
+        f"💰 <b>Total Balance:</b> <code>{u.get('points', 0)} points</code></blockquote>",
         parse_mode=ParseMode.HTML
     )
 
@@ -1058,8 +1110,8 @@ async def deductstar_cmd(_, message: Message):
         return await message.reply_text("<blockquote>🛡️ <b>Usage:</b>\n• <code>/deductstar @username 50</code>\n• Reply to user: <code>/deductstar 50</code></blockquote>", parse_mode=ParseMode.HTML)
 
     ensure_user(target)
-    u = get_user(target.id)
-    current_points = u["points"] if u else 0
+    u = get_user(target.id) or {}
+    current_points = u.get("points", 0) or 0
     actual_deduct = min(current_points, amount)
     now = time.time()
     chat_id = message.chat.id if is_group(message) else 0
@@ -1068,12 +1120,12 @@ async def deductstar_cmd(_, message: Message):
     DB.execute("INSERT INTO score_history (user_id, chat_id, points, timestamp) VALUES (?, ?, ?, ?)", (target.id, chat_id, -actual_deduct, now))
     DB.commit()
 
-    u_updated = get_user(target.id)
+    u_updated = get_user(target.id) or {}
     await message.reply_text(
         f"<blockquote>🛡️ <b>STARS DEDUCTED!</b>\n\n"
         f"👤 <b>User:</b> {rich.get_mention(target)} (<code>{target.id}</code>)\n"
         f"➖ <b>Deducted:</b> <code>-{actual_deduct} points</code>\n"
-        f"💰 <b>Total Balance:</b> <code>{u_updated['points']} points</code></blockquote>",
+        f"💰 <b>Total Balance:</b> <code>{u_updated.get('points', 0)} points</code></blockquote>",
         parse_mode=ParseMode.HTML
     )
 
@@ -1094,7 +1146,7 @@ async def calculate_player_cmd(_, message: Message):
 
     ensure_user(target_user)
     uid = target_user.id
-    u = get_user(uid)
+    u = get_user(uid) or {}
 
     easy_pts = DB.execute("SELECT SUM(points) as s, COUNT(*) as c FROM score_history WHERE user_id=? AND tag='easy'", (uid,)).fetchone()
     med_pts = DB.execute("SELECT SUM(points) as s, COUNT(*) as c FROM score_history WHERE user_id=? AND tag='medium'", (uid,)).fetchone()
@@ -1102,26 +1154,26 @@ async def calculate_player_cmd(_, message: Message):
     fight_pts = DB.execute("SELECT SUM(points) as s FROM score_history WHERE user_id=? AND tag='bet_fight'", (uid,)).fetchone()
     event_pts = DB.execute("SELECT SUM(points) as s FROM score_history WHERE user_id=? AND tag='event'", (uid,)).fetchone()
 
-    e_total = easy_pts["s"] or 0
-    e_cnt = easy_pts["c"] or 0
-    m_total = med_pts["s"] or 0
-    m_cnt = med_pts["c"] or 0
-    h_total = hard_pts["s"] or 0
-    h_cnt = hard_pts["c"] or 0
-    f_total = fight_pts["s"] or 0
-    ev_total = event_pts["s"] or 0
+    e_total = easy_pts["s"] or 0 if easy_pts else 0
+    e_cnt = easy_pts["c"] or 0 if easy_pts else 0
+    m_total = med_pts["s"] or 0 if med_pts else 0
+    m_cnt = med_pts["c"] or 0 if med_pts else 0
+    h_total = hard_pts["s"] or 0 if hard_pts else 0
+    h_cnt = hard_pts["c"] or 0 if hard_pts else 0
+    f_total = fight_pts["s"] or 0 if fight_pts else 0
+    ev_total = event_pts["s"] or 0 if event_pts else 0
 
     await message.reply_text(
         f"<blockquote>📊 <b>PLAYER AUDIT & STATS</b>\n\n"
         f"👤 <b>Player:</b> {rich.get_mention(target_user)} (<code>{uid}</code>)\n"
-        f"🎖️ <b>Level:</b> <code>Level {u['level']}</code> (<code>{u['exp']} EXP</code>)\n"
-        f"💰 <b>Net Balance:</b> ⭐ <code>{u['points']} Stars</code>\n\n"
+        f"🎖️ <b>Level:</b> <code>Level {u.get('level', 1)}</code> (<code>{u.get('exp', 0)} EXP</code>)\n"
+        f"💰 <b>Net Balance:</b> ⭐ <code>{u.get('points', 0)} Stars</code>\n\n"
         f"🟢 <b>Easy Solved:</b> <code>{e_cnt}</code> (⭐ <code>{e_total} pts</code>)\n"
         f"🟡 <b>Medium Solved:</b> <code>{m_cnt}</code> (⭐ <code>{m_total} pts</code>)\n"
         f"🔴 <b>Hard Solved:</b> <code>{h_cnt}</code> (⭐ <code>{h_total} pts</code>)\n"
         f"🌟 <b>Event Gains:</b> ⭐ <code>{ev_total} pts</code>\n"
-        f"⚔️ <b>Fights Record:</b> <code>{u['fight_wins']}W - {u['fight_losses']}L</code>\n"
-        f"🎲 <b>Bet Fights Record:</b> <code>{u['bet_wins']}W - {u['bet_losses']}L</code> (⭐ <code>{f_total} pts net</code>)</blockquote>",
+        f"⚔️ <b>Fights Record:</b> <code>{u.get('fight_wins', 0)}W - {u.get('fight_losses', 0)}L</code>\n"
+        f"🎲 <b>Bet Fights Record:</b> <code>{u.get('bet_wins', 0)}W - {u.get('bet_losses', 0)}L</code> (⭐ <code>{f_total} pts net</code>)</blockquote>",
         parse_mode=ParseMode.HTML
     )
 
@@ -1158,16 +1210,18 @@ async def stats_cmd_handler(_, message: Message):
             pass
 
     ensure_user(target_user)
-    u = get_user(target_user.id)
+    u = get_user(target_user.id) or {}
     step = get_global_config("global_exp_per_lvl", 500)
     now = time.time()
-    pt_status = rich.format_duration(u["point_card_exp"] - now) if u and u["point_card_exp"] > now else "None"
-    lvl_status = rich.format_duration(u["level_card_exp"] - now) if u and u["level_card_exp"] > now else "None"
+    p_exp = u.get("point_card_exp", 0) or 0
+    l_exp = u.get("level_card_exp", 0) or 0
+    pt_status = rich.format_duration(p_exp - now) if p_exp > now else "None"
+    lvl_status = rich.format_duration(l_exp - now) if l_exp > now else "None"
 
     await message.reply_text(
         f"<blockquote>👤 <b>Player:</b> {rich.get_mention(target_user)}\n"
-        f"🎖️ <b>Level:</b> <code>{u['level']}</code> (<code>{u['exp'] % step}/{step} EXP</code>)\n"
-        f"⭐ <b>Stars:</b> <code>{u['points']}</code> | 🧩 <b>Solved:</b> <code>{u['solved']}</code>\n"
+        f"🎖️ <b>Level:</b> <code>{u.get('level', 1)}</code> (<code>{u.get('exp', 0) % step}/{step} EXP</code>)\n"
+        f"⭐ <b>Stars:</b> <code>{u.get('points', 0)}</code> | 🧩 <b>Solved:</b> <code>{u.get('solved', 0)}</code>\n"
         f"⚡ <b>2x Point Power:</b> <code>{pt_status}</code>\n"
         f"⚡ <b>2x Level Power:</b> <code>{lvl_status}</code></blockquote>",
         parse_mode=ParseMode.HTML
@@ -1175,7 +1229,7 @@ async def stats_cmd_handler(_, message: Message):
 
 @app.on_message(filters.command(["shop", "store"]))
 async def shop_cmd_handler(_, message: Message):
-    text, kb = rich.build_shop_text_and_kb(message.from_user.id)
+    text, kb = build_shop_text_and_kb(message.from_user.id)
     await message.reply_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 @app.on_message(filters.command(["eventlist", "events"]))
@@ -1263,13 +1317,13 @@ async def universal_text_dispatcher(_, message: Message):
     if ev_game and now <= ev_game["expires"] and cleaned == "".join(c.lower() for c in ev_game["word"] if c.isalnum()):
         DB.execute("UPDATE event_games SET solved=1 WHERE chat_id=?", (chat_id,))
         ensure_user(message.from_user)
-        u = get_user(uid)
+        u = get_user(uid) or {}
         ev = DB.execute("SELECT * FROM events_bank WHERE id=?", (ev_game["event_id"],)).fetchone()
         b_pts = ev["reward_stars"] if ev else 250
         b_exp = ev["reward_exp"] if ev else 500
 
-        new_exp = (u["exp"] or 0) + b_exp
-        new_lvl = (new_exp // get_global_config("global_exp_per_lvl", 500)) + 1
+        new_exp = (u.get("exp", 0) or 0) + b_exp
+        new_lvl = calculate_level(new_exp)
         DB.execute("UPDATE users SET points=points+?, exp=?, level=? WHERE user_id=?", (b_pts, new_exp, new_lvl, uid))
         DB.commit()
 
@@ -1277,7 +1331,7 @@ async def universal_text_dispatcher(_, message: Message):
             await rich.safe_delete_and_unpin(chat_id, ev_game["message_id"], app)
 
         await message.reply_text(f"<blockquote>🎉 <b>EVENT PUZZLE SOLVED!</b>\n\n👤 {rich.get_mention(message.from_user)}\n✅ <b>Word:</b> <code>{ev_game['word'].upper()}</code>\n⭐ <b>+{b_pts} stars</b> | ⚡ <b>+{b_exp} EXP</b></blockquote>", parse_mode=ParseMode.HTML)
-        asyncio.create_task(send_log_notification(message.chat, message.from_user, ev_game["word"], b_pts, b_exp, u['points'] + b_pts, new_exp, new_lvl, is_event=True))
+        asyncio.create_task(send_log_notification(message.chat, message.from_user, ev_game["word"], b_pts, b_exp, (u.get('points', 0) or 0) + b_pts, new_exp, new_lvl, is_event=True))
         return
 
     # Normal Loop Puzzle Check
@@ -1285,12 +1339,12 @@ async def universal_text_dispatcher(_, message: Message):
     if game and now <= game["expires"] and cleaned == "".join(c.lower() for c in game["word"] if c.isalnum()):
         DB.execute("UPDATE games SET solved=1 WHERE chat_id=?", (chat_id,))
         ensure_user(message.from_user)
-        u = get_user(uid)
+        u = get_user(uid) or {}
         pts = get_global_config(f"points_{game['difficulty']}", 10)
         exp_gain = get_global_config(f"exp_{game['difficulty']}", 30)
 
-        new_exp = (u["exp"] or 0) + exp_gain
-        new_lvl = (new_exp // get_global_config("global_exp_per_lvl", 500)) + 1
+        new_exp = (u.get("exp", 0) or 0) + exp_gain
+        new_lvl = calculate_level(new_exp)
         DB.execute("UPDATE users SET points=points+?, solved=solved+1, exp=?, level=? WHERE user_id=?", (pts, new_exp, new_lvl, uid))
         DB.commit()
 
@@ -1301,7 +1355,7 @@ async def universal_text_dispatcher(_, message: Message):
             f"<blockquote>🎉 <b>CORRECT!</b>\n\n👤 {rich.get_mention(message.from_user)}\n✅ <b>Answer:</b> <code>{game['word'].upper()}</code>\n⭐ <b>+{pts} points</b> | ⚡ <b>+{exp_gain} EXP</b> (Lvl {new_lvl})</blockquote>",
             parse_mode=ParseMode.HTML
         )
-        asyncio.create_task(send_log_notification(message.chat, message.from_user, game["word"], pts, exp_gain, u['points'] + pts, new_exp, new_lvl, is_event=False))
+        asyncio.create_task(send_log_notification(message.chat, message.from_user, game["word"], pts, exp_gain, (u.get('points', 0) or 0) + pts, new_exp, new_lvl, is_event=False))
 
         s = get_settings(chat_id)
         if s["is_active"]:
@@ -1371,41 +1425,47 @@ async def callback_router(_, query: CallbackQuery):
 
     elif data == "open_shop_btn" or data == "refresh_shop":
         ensure_user(query.from_user)
-        text, kb = rich.build_shop_text_and_kb(user_id)
+        text, kb = build_shop_text_and_kb(user_id)
         return await query.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
     elif data.startswith("buy_card_"):
         ensure_user(query.from_user)
-        u = get_user(user_id)
+        u = get_user(user_id) or {}
         card_type = data.split("_")[2]
         prefix = "card_point" if card_type == "point" else "card_level"
         price = get_global_config(f"{prefix}_price", 500)
         hrs = get_global_config(f"{prefix}_hrs", 3)
         min_lvl = get_global_config(f"{prefix}_req_lvl", 1)
 
-        if (u["level"] or 1) < min_lvl or (u["points"] or 0) < price:
-            return await query.message.reply_text("<blockquote>❌ <b>Required Level ya Stars poore nahi hain.</b></blockquote>", parse_mode=ParseMode.HTML)
+        user_pts = u.get("points", 0) or 0
+        user_lvl = u.get("level", 1) or 1
+        if user_lvl < min_lvl:
+            return await query.message.reply_text(f"<blockquote>❌ <b>Is card ke liye Level {min_lvl}+ hona zaroori hai!</b></blockquote>", parse_mode=ParseMode.HTML)
+        if user_pts < price:
+            return await query.message.reply_text(f"<blockquote>❌ <b>Points kam hain! Required: {price} stars.</b></blockquote>", parse_mode=ParseMode.HTML)
 
         field = "point_card_exp" if card_type == "point" else "level_card_exp"
-        cur_exp = u[field] if u[field] and u[field] > now else now
-        DB.execute(f"UPDATE users SET points = points - ?, {field} = ? WHERE user_id = ?", (price, cur_exp + (hrs * 3600), user_id))
+        cur_exp = u.get(field, 0) or 0
+        new_card_exp = max(cur_exp, now) + (hrs * 3600)
+        DB.execute(f"UPDATE users SET points = points - ?, {field} = ? WHERE user_id = ?", (price, new_card_exp, user_id))
         DB.execute("INSERT INTO score_history (user_id, chat_id, points, tag, timestamp) VALUES (?, 0, ?, 'shop_card', ?)", (user_id, -price, now))
         DB.commit()
-        text, kb = rich.build_shop_text_and_kb(user_id)
+        text, kb = build_shop_text_and_kb(user_id)
         return await query.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
     elif data == "buy_instant_exp":
         ensure_user(query.from_user)
-        u = get_user(user_id)
+        u = get_user(user_id) or {}
         cost = get_global_config("shop_exp_cost", 1000)
         exp_rew = get_global_config("shop_exp_reward", 500)
-        if (u["points"] or 0) < cost:
+        if (u.get("points", 0) or 0) < cost:
             return await query.message.reply_text(f"<blockquote>❌ <b>Stars kam hain! Price: {cost} stars.</b></blockquote>", parse_mode=ParseMode.HTML)
-        new_exp = (u["exp"] or 0) + exp_rew
-        new_lvl = (new_exp // get_global_config("global_exp_per_lvl", 500)) + 1
+        new_exp = (u.get("exp", 0) or 0) + exp_rew
+        new_lvl = calculate_level(new_exp)
         DB.execute("UPDATE users SET points = points - ?, exp = ?, level = ? WHERE user_id = ?", (cost, new_exp, new_lvl, user_id))
+        DB.execute("INSERT INTO score_history (user_id, chat_id, points, tag, timestamp) VALUES (?, 0, ?, 'shop_exp', ?)", (user_id, -cost, now))
         DB.commit()
-        text, kb = rich.build_shop_text_and_kb(user_id)
+        text, kb = build_shop_text_and_kb(user_id)
         return await query.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
     elif data == "close_panel":
@@ -1424,28 +1484,18 @@ async def main():
             print(f"Assistant start warning: {e}")
 
     print("🚀 Advanced Jumble, Bet Fight, Level, Shop & Event Bot Started Successfully!")
-    
-    # Background background tasks
     asyncio.create_task(event_scheduler_loop())
     asyncio.create_task(auto_backup_task())
 
-    # Active groups me puzzles resume karna
-    try:
-        rows = DB.execute("SELECT chat_id, default_diff FROM settings WHERE is_active = 1 AND chat_id != 0").fetchall()
-        for row in rows:
-            try:
-                await start_game(row["chat_id"], row["default_diff"] or "medium", row["chat_id"])
-                await asyncio.sleep(0.5)
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"Resume error: {e}")
+    rows = DB.execute("SELECT chat_id, default_diff FROM settings WHERE is_active = 1 AND chat_id != 0").fetchall()
+    for row in rows:
+        try:
+            await start_game(row["chat_id"], row["default_diff"] or "medium", row["chat_id"])
+            await asyncio.sleep(0.5)
+        except Exception:
+            pass
 
-    # Bot ko online/active rakhne ke liye
-    from pyrogram import idle
     await idle()
-
-    # Graceful shutdown jab stop karein
     await app.stop()
     if assistant:
         try:
