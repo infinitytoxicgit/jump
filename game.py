@@ -1424,14 +1424,32 @@ async def main():
             print(f"Assistant start warning: {e}")
 
     print("🚀 Advanced Jumble, Bet Fight, Level, Shop & Event Bot Started Successfully!")
+    
+    # Background background tasks
     asyncio.create_task(event_scheduler_loop())
     asyncio.create_task(auto_backup_task())
 
-    rows = DB.execute("SELECT chat_id, default_diff FROM settings WHERE is_active = 1 AND chat_id != 0").fetchall()
-    for row in rows:
+    # Active groups me puzzles resume karna
+    try:
+        rows = DB.execute("SELECT chat_id, default_diff FROM settings WHERE is_active = 1 AND chat_id != 0").fetchall()
+        for row in rows:
+            try:
+                await start_game(row["chat_id"], row["default_diff"] or "medium", row["chat_id"])
+                await asyncio.sleep(0.5)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"Resume error: {e}")
+
+    # Bot ko online/active rakhne ke liye
+    from pyrogram import idle
+    await idle()
+
+    # Graceful shutdown jab stop karein
+    await app.stop()
+    if assistant:
         try:
-            await start_game(row["chat_id"], row["default_diff"] or "medium", row["chat_id"])
-            await asyncio.sleep(0.5)
+            await assistant.stop()
         except Exception:
             pass
 
